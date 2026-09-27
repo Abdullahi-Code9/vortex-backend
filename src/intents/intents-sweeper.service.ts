@@ -82,8 +82,8 @@ export class IntentsSweeperService implements OnModuleInit, OnModuleDestroy {
     );
 
     for (const intent of missedFills) {
-      await this.slashMissedFill(intent.intentId, intent.solver, now);
-      slashedCount++;
+      const slashed = await this.slashMissedFill(intent.intentId, intent.solver, now);
+      if (slashed) slashedCount++;
     }
 
     return { expiredCount, slashedCount, durationMs: Date.now() - startMs };
@@ -123,23 +123,27 @@ export class IntentsSweeperService implements OnModuleInit, OnModuleDestroy {
     intentId: string,
     solver: string | undefined,
     now: number,
-  ) {
+  ): Promise<boolean> {
     const reason = "accepted intent not filled before deadline";
 
     // Atomic guard: a concurrent solver fill() may have already transitioned
-    // this intent out of "accepted" — skip slashing if so.
+    // this intent out of "accepted" — skip slashing if so (fill wins).
     const slashed = await this.intentsService.slashIfAccepted(intentId, {
       slashedAt: now,
       slashReason: reason,
     });
-    if (!slashed) return;
+    if (!slashed) return false;
+    this.intentsService.appendAuditEntry(intentId, "slashed", "system", reason, {
+      solver,
+      slashedAt: now,
+    });
     await this.intentsGateway.broadcast({ type: "intent_slashed", intentId, solver, reason });
 
     if (!solver) {
       // Shouldn't happen in practice — an "accepted" intent always has a
       // solver — but don't let a bad record throw the whole sweep cycle.
       logger.error(`[sweeper] intent ${intentId} was accepted with no solver on record`);
-      return;
+      return true;
     }
 
     await this.solversService.recordFailedFill(solver, intentId);
@@ -153,5 +157,6 @@ export class IntentsSweeperService implements OnModuleInit, OnModuleDestroy {
     console.log(
       `[sweeper] slashed solver=${solver} for intent=${intentId}: ${result.detail} slashId=${slashRecord?.slashId ?? "unknown"}`,
     );
+    return true;
   }
 }

@@ -1,0 +1,36 @@
+rule_files:
+  - vortex-slo.yml
+
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'vortex_http_requests_total{method="POST",route="/api/v1/intents",status_code="500"}'
+        values: 0+10x100
+      - series: 'vortex_http_requests_total{method="POST",route="/api/v1/intents",status_code="200"}'
+        values: 1000+1000x100
+      - series: vortex_event_ingestion_lag_seconds
+        values: 0+0x50 60+60x50
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: VortexHighBurnRate
+        exp_alerts: []
+      - eval_time: 100m
+        alertname: VortexSlowBurnRate
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: vortex-relay-availability
+            exp_annotations:
+              summary: "Slow burn rate on relay availability (6h/30m)"
+  - interval: 1m
+    input_series:
+      - series: vortex_event_ingestion_lag_seconds
+        values: 0+0x5 45+45x20
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VortexIngestionLagHigh
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: event-ingestion-lag

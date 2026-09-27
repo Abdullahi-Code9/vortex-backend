@@ -1,0 +1,73 @@
+groups:
+  - name: vortex-slo-recording
+    interval: 30s
+    rules:
+      - record: vortex:availability:error_ratio_5m
+        expr: |
+          sum(rate(vortex_http_requests_total{status_code=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(vortex_http_requests_total[5m])), 0.01)
+      - record: vortex:create:p95_5m
+        expr: histogram_quantile(0.95, sum(rate(vortex_intent_create_duration_seconds_bucket[5m])) by (le))
+      - record: vortex:ws:p95_5m
+        expr: histogram_quantile(0.95, sum(rate(vortex_ws_delivery_duration_seconds_bucket[5m])) by (le))
+      - record: vortex:confirm:p95_5m
+        expr: histogram_quantile(0.95, sum(rate(vortex_tx_confirmation_duration_seconds_bucket[5m])) by (le))
+  - name: vortex-slo-burn-rate
+    interval: 30s
+    rules:
+      - alert: VortexHighBurnRate
+        expr: |
+          (
+            sum(rate(vortex_http_requests_total{status_code=~"5.."}[1h]))
+            / clamp_min(sum(rate(vortex_http_requests_total[1h])), 1)
+          ) > 0.002
+          and
+          (
+            sum(rate(vortex_http_requests_total{status_code=~"5.."}[5m]))
+            / clamp_min(sum(rate(vortex_http_requests_total[5m])), 1)
+          ) > 0.002
+          and sum(rate(vortex_http_requests_total[1h])) > 100 / 3600
+        for: 5m
+        labels:
+          severity: page
+          slo: vortex-relay-availability
+        annotations:
+          summary: "High burn rate on relay availability (1h/5m)"
+          runbook_url: "https://github.com/stellar-vortex-protocol/vortex-backend/blob/main/docs/runbooks/on-call.md#scenario-a--soroban-rpc-downtime"
+      - alert: VortexSlowBurnRate
+        expr: |
+          (
+            sum(rate(vortex_http_requests_total{status_code=~"5.."}[6h]))
+            / clamp_min(sum(rate(vortex_http_requests_total[6h])), 1)
+          ) > 0.001
+          and
+          (
+            sum(rate(vortex_http_requests_total{status_code=~"5.."}[30m]))
+            / clamp_min(sum(rate(vortex_http_requests_total[30m])), 1)
+          ) > 0.001
+        for: 30m
+        labels:
+          severity: ticket
+          slo: vortex-relay-availability
+        annotations:
+          summary: "Slow burn rate on relay availability (6h/30m)"
+          runbook_url: "https://github.com/stellar-vortex-protocol/vortex-backend/blob/main/docs/runbooks/on-call.md#escalation-path"
+      - alert: VortexCreateLatencyHigh
+        expr: vortex:create:p95_5m > 0.5
+        for: 10m
+        labels:
+          severity: ticket
+          slo: intent-create-latency
+        annotations:
+          summary: "Intent-create p95 > 500ms for 10m"
+          runbook_url: "https://github.com/stellar-vortex-protocol/vortex-backend/blob/main/docs/runbooks/on-call.md#scenario-b--stuck-or-slow-sweeper"
+      - alert: VortexIngestionLagHigh
+        expr: vortex_event_ingestion_lag_seconds > 30
+        for: 10m
+        labels:
+          severity: page
+          slo: event-ingestion-lag
+        annotations:
+          summary: "Event ingestion lag > 30s for 10m"
+          runbook_url: "https://github.com/stellar-vortex-protocol/vortex-backend/blob/main/docs/runbooks/on-call.md#scenario-a--soroban-rpc-downtime"

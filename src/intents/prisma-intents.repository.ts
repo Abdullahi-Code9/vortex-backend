@@ -84,15 +84,25 @@ export class PrismaIntentsRepository implements IIntentsRepository {
   }
 
   /**
-   * Atomically accept an intent only when it is currently `open`.
+   * Atomically accept an intent only when it is currently `open` AND its
+   * deadline is still in the future (issue #473).
    *
    * Uses a single `updateMany` with a compound WHERE clause so the database
-   * enforces the state guard — zero rows updated means another solver already
-   * won the race.
+   * enforces the state + deadline guards — zero rows updated means another
+   * solver already won the race or the sweeper already expired the intent.
+   *
+   * Lock ordering: callers enforcing per-solver caps must hold the solver
+   * advisory lock (`pg_advisory_xact_lock`) BEFORE calling this method.
    */
-  async acceptIfOpen(id: string, solver: string, newDeadline: number): Promise<Intent | null> {
+  async acceptIfOpen(
+    id: string,
+    solver: string,
+    newDeadline: number,
+    now?: number,
+  ): Promise<Intent | null> {
+    const nowSec = now ?? Math.floor(Date.now() / 1000);
     const result = await this.prisma.intent.updateMany({
-      where: { intentId: id, state: PrismaIntentState.open },
+      where: { intentId: id, state: PrismaIntentState.open, deadline: { gt: nowSec } },
       data: {
         state: PrismaIntentState.accepted,
         solver,
@@ -100,7 +110,7 @@ export class PrismaIntentsRepository implements IIntentsRepository {
       },
     });
 
-    if (result.count === 0) return null; // not found or already taken
+    if (result.count === 0) return null; // not found, already taken, or expired
 
     // Fetch the updated row to return the full intent shape.
     const row = await this.prisma.intent.findUnique({ where: { intentId: id } });
@@ -108,28 +118,60 @@ export class PrismaIntentsRepository implements IIntentsRepository {
   }
 
   /**
+   * Acquire a transaction-scoped advisory lock for a solver key (issue #473).
+   *
+   * Must be called inside a `$transaction` callback to serialize per-solver
+   * cap checks across replicas. Lock ordering: solver lock BEFORE any intent
+   * row write, released automatically at transaction end. No-op fallback when
+   * the Prisma client does not expose `$executeRaw` (e.g. unit tests).
+   */
+  async acquireSolverLock(solver: string): Promise<void> {
+    const client = this.prisma as unknown as {
+      $executeRaw?: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown>;
+    };
+    if (typeof client.$executeRaw !== "function") return;
+    await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${solver}))`;
+  }
+
+  /** Count open/accepted intents for a user with a single COUNT query. */
+  async countOpenByUser(user: string): Promise<number> {
+    return this.prisma.intent.count({
+      where: {
+        user: { equals: user, mode: "insensitive" },
+        state: { in: [PrismaIntentState.open, PrismaIntentState.accepted] },
+      },
+    });
+  }
+
+  /**
    * Atomically fill an intent only when it is currently `accepted` by the
-   * specified solver.
+   * specified solver AND the fill window has not elapsed (issue #473).
    *
    * Uses a single `updateMany` with a compound WHERE clause — zero rows
-   * updated means the intent was not in the expected state or assigned to a
-   * different solver.
+   * updated means the intent was not in the expected state, is assigned to a
+   * different solver, or the deadline passed (sweeper wins).
    */
   async fillIfAccepted(
     id: string,
     solver: string,
     patch: Omit<Partial<Intent>, "state" | "solver">,
+    now?: number,
   ): Promise<Intent | null> {
+    const nowSec = now ?? Math.floor(Date.now() / 1000);
     const result = await this.prisma.intent.updateMany({
       where: {
         intentId: id,
         state: PrismaIntentState.accepted,
         solver,
+        deadline: { gt: nowSec },
       },
       data: {
         state: PrismaIntentState.filled,
         ...(patch.filledAt !== undefined ? { filledAt: patch.filledAt } : {}),
         ...(patch.fillAmount !== undefined ? { fillAmount: patch.fillAmount } : {}),
+        ...(patch.feeAmount !== undefined
+          ? { feeAmount: patch.feeAmount as string }
+          : {}),
         ...(patch.txHash !== undefined ? { txHash: patch.txHash } : {}),
       },
     });

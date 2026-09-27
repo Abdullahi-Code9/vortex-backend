@@ -319,35 +319,38 @@ export class IntentsService implements OnModuleDestroy {
   }
 
   /**
-   * Atomically accept an intent only if it is currently "open".
-   * Delegates to the repository so both in-memory and Prisma adapters can
-   * apply the conditional write atomically.
+   * Atomically accept an intent only if it is currently "open" with a future
+   * deadline (issue #473). Delegates to the repository so both in-memory and
+   * Prisma adapters apply the conditional write atomically.
    *
    * The new deadline is set to now + CHAIN_FILL_WINDOW_DEFAULTS[srcChain]
    * so solvers on slower-settling chains get a proportionally longer window
    * and are not unfairly slashed for a deadline that was never realistic.
-   * Returns null when the intent is not found or is not in the "open" state.
+   * Returns null when the intent is not found, not open, or past deadline.
    */
-  async acceptIfOpen(id: string, solver: string): Promise<Intent | null> {
+  async acceptIfOpen(id: string, solver: string, now?: number): Promise<Intent | null> {
     const intent = await this.repo.findById(id);
     if (!intent) return null;
-    const now = Math.floor(Date.now() / 1000);
+    const nowSec = now ?? Math.floor(Date.now() / 1000);
     const fillWindow =
       CHAIN_FILL_WINDOW_DEFAULTS[intent.srcChain] ?? DEFAULT_FILL_WINDOW_SECONDS;
-    return this.repo.acceptIfOpen(id, solver, now + fillWindow);
+    return this.repo.acceptIfOpen(id, solver, nowSec + fillWindow, nowSec);
   }
 
   /**
-   * Atomically fill an intent only if it is currently "accepted" by the given solver.
-   * Returns null when the intent is not found, not accepted, or assigned to a
-   * different solver.
+   * Atomically fill an intent only if it is currently "accepted" by the given
+   * solver with a future deadline (issue #473).
+   * Returns null when the intent is not found, not accepted, assigned to a
+   * different solver, or past the fill window (sweeper wins).
    */
   async fillIfAccepted(
     id: string,
     solver: string,
     patch: Omit<Partial<Intent>, "state" | "solver">,
+    now?: number,
   ): Promise<Intent | null> {
-    return this.repo.fillIfAccepted(id, solver, patch);
+    const nowSec = now ?? Math.floor(Date.now() / 1000);
+    return this.repo.fillIfAccepted(id, solver, patch, nowSec);
   }
 
   /**

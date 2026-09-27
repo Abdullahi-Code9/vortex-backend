@@ -63,31 +63,42 @@ export interface IIntentsRepository {
 
   /**
    * Atomically transition an intent from `open` → `accepted` only if it is
-   * currently in the `open` state.  Mirrors the DB pattern:
+   * currently in the `open` state AND its deadline is still in the future.
+   * Mirrors the DB pattern:
    *   UPDATE intents SET state='accepted', solver=$2, deadline=$3
-   *   WHERE intent_id=$1 AND state='open'
+   *   WHERE intent_id=$1 AND state='open' AND deadline > $4
    *   RETURNING *
    * Returns the updated intent on success, `null` when the intent is not
-   * found or is not in the `open` state (already taken by another solver).
+   * found, already taken, or past deadline (sweeper wins the race).
+   *
+   * Lock ordering (issue #473): callers holding a per-solver advisory lock
+   * must acquire it BEFORE invoking this method; this method itself only
+   * touches the single intent row so no lock inversion is possible.
    */
   acceptIfOpen(
     id: string,
     solver: string,
     newDeadline: number,
+    now?: number,
   ): Intent | null | Promise<Intent | null>;
 
   /**
    * Atomically transition an intent from `accepted` → `filled` only if it is
-   * currently accepted by the specified solver.  Mirrors the DB pattern:
+   * currently accepted by the specified solver AND the fill window has not
+   * elapsed. Mirrors the DB pattern:
    *   UPDATE intents SET state='filled', ...patch
-   *   WHERE intent_id=$1 AND state='accepted' AND solver=$2
+   *   WHERE intent_id=$1 AND state='accepted' AND solver=$2 AND deadline > $3
    *   RETURNING *
    * Returns the updated intent on success, `null` on any guard failure.
+   * The `minDstAmount` invariant (fill >= minDst) is enforced by the
+   * controller/service layer with bigint comparison before this write; the
+   * state+deadline predicates here make the write itself race-free.
    */
   fillIfAccepted(
     id: string,
     solver: string,
     patch: Omit<Partial<Intent>, "state" | "solver">,
+    now?: number,
   ): Intent | null | Promise<Intent | null>;
 
   /**
@@ -168,9 +179,13 @@ export class InMemoryIntentsRepository implements IIntentsRepository {
     return this.store.delete(id);
   }
 
-  acceptIfOpen(id: string, solver: string, newDeadline: number): Intent | null {
+  acceptIfOpen(id: string, solver: string, newDeadline: number, now?: number): Intent | null {
     const existing = this.store.get(id);
     if (!existing || existing.state !== "open") return null;
+    // Deadline predicate pushed into the atomic check (issue #473): a solver
+    // racing the sweeper past expiry must lose even in-process.
+    const nowSec = now ?? Math.floor(Date.now() / 1000);
+    if (existing.deadline <= nowSec) return null;
     const updated: Intent = { ...existing, state: "accepted", solver, deadline: newDeadline };
     this.store.set(id, updated);
     return updated;
@@ -180,9 +195,12 @@ export class InMemoryIntentsRepository implements IIntentsRepository {
     id: string,
     solver: string,
     patch: Omit<Partial<Intent>, "state" | "solver">,
+    now?: number,
   ): Intent | null {
     const existing = this.store.get(id);
     if (!existing || existing.state !== "accepted" || existing.solver !== solver) return null;
+    const nowSec = now ?? Math.floor(Date.now() / 1000);
+    if (existing.deadline <= nowSec) return null;
     const updated: Intent = { ...existing, ...patch, state: "filled" };
     this.store.set(id, updated);
     return updated;
