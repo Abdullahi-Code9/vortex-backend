@@ -37,6 +37,13 @@ function makeConfigService(
     dbQueryTimeoutMs: 5000,
     dbBatchQueryTimeoutMs: 10000,
     dbStatsQueryTimeoutMs: 15000,
+    // Emergency kill-switch (issue #477) — no operator token in unit tests, so
+    // the control plane stays disabled.
+    killswitch: {
+      operatorToken: "",
+      redisUrl: "",
+      pollMs: 2000,
+    },
   };
   return {
     get: (key: string) => {

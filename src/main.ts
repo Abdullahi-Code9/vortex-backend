@@ -66,7 +66,13 @@ async function bootstrap() {
 
   // Issue #20 — trust the first proxy hop so Helmet/HSTS sees the real
   // forwarded protocol when TLS terminates upstream behind nginx/ALB.
-  app.set("trust proxy", 1);
+  //
+  // `set` lives on the underlying Express instance; INestApplication's public
+  // type does not declare it, so narrow to the Express app before calling.
+  (app.getHttpAdapter().getInstance() as { set: (key: string, value: unknown) => void }).set(
+    "trust proxy",
+    1,
+  );
 
   // Issue #46 — explicit, tight body-size cap (DTOs are tiny)
   app.use(json({ limit: BODY_SIZE_LIMIT }));

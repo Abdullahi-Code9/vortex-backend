@@ -33,6 +33,34 @@ enum SupportedChain {
   avalanche
 }
 
+// ─── Kill-switch scopes (issue #477) ──────────────────────────────────────────
+// A switch is addressed by exactly one of four mutually-exclusive scopes.
+// `global` has no chain/token; `chain` sets chain only; `token` sets chain +
+// token; `operation` narrows further to a single operation name.
+// Evaluation walks GLOBAL → CHAIN → TOKEN → OPERATION and the most specific
+// matching switch wins, so an operation-level resume can never re-open a
+// scope that a broader switch is still holding closed.
+
+enum KillSwitchScope {
+  global
+  chain
+  token
+  operation
+}
+
+/// Operations a switch can gate. Constrained in the application layer (DTO +
+/// normalisation) before it reaches the database, so the enum here is a
+/// backstop rather than the only gate.
+/// Changing this list requires a migration, since Prisma maps it to a real
+/// Postgres enum type.
+enum KillSwitchOperation {
+  create
+  accept
+  fill
+  slash
+  onchain
+}
+
 // ─── Intent ──────────────────────────────────────────────────────────────────
 // Represents a cross-chain swap request submitted by a user.
 // The nested token objects (srcToken / dstToken) are stored as JSONB so the
@@ -152,4 +180,84 @@ model Token {
   @@index([chain])
   @@index([symbol])
   @@map("tokens")
+}
+
+// ─── KillSwitch (issue #477) ─────────────────────────────────────────────────
+// Hierarchical emergency pause. One row per (scope, chain, token, operation)
+// tuple; activating the row closes that scope for the gated operation.
+//
+// Because the unique key is the full scope tuple, "resume" is an idempotent
+// state flip on a single row rather than a delete/insert race between replicas.
+//
+// `scope` is stored alongside the nullable chain/token/operation columns so the
+// row is self-describing; the application maintains that invariant in one place
+// (KillSwitchService.normaliseScope) rather than trusting callers.
+
+model KillSwitch {
+  id        String   @id @default(uuid()) @map("id")
+  scope     KillSwitchScope @map("scope")
+  /// NULL for global scope.
+  chain     String?  @map("chain")
+  /// NULL for global and chain scopes.
+  token     String?  @map("token")
+  /// NULL unless scope = operation.
+  operation KillSwitchOperation? @map("operation")
+
+  /// Canonical encoding of (scope, chain, token, operation), e.g.
+  /// "operation|stellar|USDC|fill". Postgres will not let Prisma build a
+  /// findUnique over nullable columns, so this non-null surrogate carries the
+  /// uniqueness guarantee while the typed columns above stay queryable.
+  scopeKey  String   @unique @map("scope_key")
+
+  /// true = writes are blocked for this scope, false = explicitly resumed.
+  active    Boolean  @map("active")
+  /// Machine-readable reason surfaced to clients as `reason` in the 503 body.
+  reasonCode String @map("reason_code")
+  /// Free-text operator explanation (incident ticket, etc).
+  reason     String  @map("reason")
+  /// Operator identity that activated or resumed the switch.
+  activatedBy String  @map("activated_by")
+
+  /// Unix epoch ms of the last state change. Used as the cheap change-detection
+  /// key for the polling fallback (monotonic: re-pausing bumps it).
+  updatedAt  Int     @map("updated_at")
+
+  createdAt  Int     @map("created_at")
+  /// Unix epoch ms of the last time this switch transitioned active -> inactive.
+  /// Unset while never resumed, so a brand-new row cannot inherit a stale
+  /// cooldown from a previous pause of the same scope.
+  lastResumedAt Int?  @map("last_resumed_at")
+
+  // Resume requires two distinct approvals; see KillSwitchApproval.
+  approvals       KillSwitchApproval[]
+  /// Number of distinct approvals still required before the switch may resume.
+  approvalsRequired Int @default(2) @map("approvals_required")
+
+  @@index([active])
+  @@index([scope, chain, token, operation])
+  /// Backs the polling fallback's "max(updated_at) since last snapshot?" probe.
+  @@index([updatedAt])
+  @@map("kill_switches")
+}
+// ─── KillSwitchApproval (issue #477) ──────────────────────────────────────────
+// One row per operator approval to resume a switch. The resume guard is a
+// count of DISTINCT approver over this table, so a single operator cannot
+// approve twice, and two different operators can never be one person unless the
+// caller lies about identity (the API ties identity to the operator token).
+
+model KillSwitchApproval {
+  id          String   @id @default(uuid()) @map("id")
+  killSwitchId String  @map("kill_switch_id")
+  killSwitch  KillSwitch @relation(fields: [killSwitchId], references: [id], onDelete: Cascade)
+  /// Operator identity that granted this approval. Unique per switch so one
+  /// operator cannot satisfy the two-approval rule alone.
+  approver    String   @map("approver")
+  /// Unix epoch ms.
+  approvedAt  Int      @map("approved_at")
+  /// Optional note explaining the approval.
+  note        String?  @map("note")
+
+  @@unique([killSwitchId, approver])
+  @@index([killSwitchId])
+  @@map("kill_switch_approvals")
 }

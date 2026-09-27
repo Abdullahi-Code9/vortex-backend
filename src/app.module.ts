@@ -9,6 +9,8 @@ import { SolversModule } from "./solvers/solvers.module";
 import { StatsModule } from "./stats/stats.module";
 import { SorobanModule } from "./soroban/soroban.module";
 import { RoutingModule } from "./routing/routing.module";
+import { MetricsModule } from "./metrics/metrics.module";
+import { KillSwitchModule } from "./killswitch/killswitch.module";
 import { PrismaModule } from "./prisma/prisma.module";
 
 @Module({
@@ -23,6 +25,13 @@ import { PrismaModule } from "./prisma/prisma.module";
     ]),
     ConfigModule,
     PrismaModule,
+    // @Global() — registers MetricsService / MetricsInterceptor / MetricsController
+    // for the whole app. Must be imported here or the global providers never
+    // become visible to other modules (e.g. IntentsSweeperService).
+    MetricsModule,
+    // Emergency pause control plane (issue #477). @Global() so KillSwitchGuard
+    // can gate write handlers in any module.
+    KillSwitchModule,
     HealthModule,
     TokensModule,
     IntentsModule,
