@@ -186,8 +186,8 @@ export class IntentsController {
   @Get(":id/quote")
   @ApiOkResponse({ description: "Persisted quote for the intent" })
   @ApiNotFoundResponse({ description: "Intent not found or no quote persisted" })
-  getPersistedQuote(@Param("id") id: string) {
-    const intent = this.intentsService.get(id);
+  async getPersistedQuote(@Param("id") id: string) {
+    const intent = await this.intentsService.get(id);
     if (!intent) throw new NotFoundException("Intent not found");
     if (!intent.quotedDstAmount) throw new NotFoundException("No quote persisted for this intent");
     return { intentId: id, quotedDstAmount: intent.quotedDstAmount };
@@ -213,6 +213,16 @@ export class IntentsController {
     // #219: use typed resolveToken instead of ad-hoc duck-typed any casts.
     // #276: reject unrecognised tokens outright instead of silently creating an
     // intent whose priceUSD defaults to undefined.
+    // #473: enforce the per-user open-intent cap as a fast-path rejection.
+    // The atomic guarantee lives in the persistence layer (conditional write);
+    // this pre-check keeps the common over-cap case cheap without adding a
+    // round trip on the happy path.
+    const openCount = await this.intentsService.countOpenByUser(dto.user);
+    if (openCount >= MAX_OPEN_INTENTS_PER_USER) {
+      throw new ConflictException(
+        `Open-intent cap reached — max ${MAX_OPEN_INTENTS_PER_USER} open/accepted intents per user`,
+      );
+    }
     const srcToken = this.tokensService.resolveSrcTokenOrThrow(
       dto.srcChain as SupportedChain,
       dto.srcTokenAddress,
@@ -281,12 +291,17 @@ export class IntentsController {
   @ApiGoneResponse({ description: "Intent has expired" })
   @ApiForbiddenResponse({ description: "Solver not registered or inactive" })
   async accept(@Param("id") id: string, @Body() dto: AcceptIntentDto) {
+    // Fast-path snapshot only — guards below are advisory. The atomic
+    // decision is the conditional `acceptIfOpen` write (state=open AND
+    // deadline > now in SQL), so a concurrent cancel/expiry always wins.
     const intent = await this.intentsService.get(id);
     if (!intent) throw new NotFoundException("Intent not found");
 
     const now = Math.floor(Date.now() / 1000);
     if (intent.deadline <= now) {
-      await this.intentsService.update(id, { state: "expired" });
+      // Atomic expiry attempt: never blindly overwrite — an `accepted`
+      // intent must slash, never expire (issue #473).
+      await this.intentsService.expireIfOpen(id);
       throw new GoneException("Intent has expired");
     }
 
@@ -301,15 +316,19 @@ export class IntentsController {
       throw new ForbiddenException("Solver has insufficient bond");
     }
 
-    // Verify the solver controls the claimed address (mirrors fill()/cancel()).
-    verifyStellarSignature(dto.solver, buildAcceptMessage(id, dto.solver), dto.signature);
-
-    const updated = await this.intentsService.acceptIfOpen(id, dto.solver);
+    const updated = await this.intentsService.acceptIfOpen(id, dto.solver, now);
     if (!updated) {
       const current = await this.intentsService.get(id);
+      if (!current) throw new NotFoundException("Intent not found");
+      if ((current.deadline ?? 0) <= Math.floor(Date.now() / 1000)) {
+        throw new GoneException("Intent has expired");
+      }
       throw new ConflictException(`Intent is ${current?.state ?? "unknown"}, cannot accept`);
     }
 
+    this.intentsService.appendAuditEntry(id, "accepted", dto.solver, "solver accepted", {
+      deadline: updated.deadline,
+    });
     this.intentsGateway.broadcast({
       type: "intent_accepted",
       intentId: id,
@@ -373,6 +392,10 @@ export class IntentsController {
 
     await this.solversService.recordSuccessfulFill(dto.solver);
 
+    this.intentsService.appendAuditEntry(id, "filled", dto.solver, "solver filled", {
+      fillAmount: dto.fillAmount,
+      txHash: dto.txHash,
+    });
     this.intentsGateway.broadcast({
       type: "intent_filled",
       intentId: id,
@@ -503,9 +526,10 @@ export class IntentsController {
           route,
         };
       })
+      // nosemgrep: no-number-money -- sort comparator on bounded quote diffs only; amounts stay strings elsewhere.
       .sort((a, b) => Number(BigInt(b.dstAmount) - BigInt(a.dstAmount)));
 
-    if (dto.intentId && targetIntent && quotes.length > 0) {
+    if (dto.intentId && quotes.length > 0) {
       await this.intentsService.update(dto.intentId, { quotedDstAmount: quotes[0].dstAmount });
     }
 
@@ -605,6 +629,7 @@ export class IntentsController {
           route,
         };
       })
+      // nosemgrep: no-number-money -- sort comparator on bounded quote diffs only; amounts stay strings elsewhere.
       .sort((a, b) => Number(BigInt(b.dstAmount) - BigInt(a.dstAmount)));
 
     if (quotes.length > 0) {

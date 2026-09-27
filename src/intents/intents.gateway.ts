@@ -1,8 +1,9 @@
-import { OnModuleDestroy } from "@nestjs/common";
+import { OnModuleDestroy, Optional } from "@nestjs/common";
 import { OnGatewayConnection, OnGatewayDisconnect, WebSocketGateway } from "@nestjs/websockets";
 import { WebSocket } from "ws";
 import { IntentsService } from "./intents.service";
 import { SolversService } from "../solvers/solvers.service";
+import { MetricsService } from "../metrics/metrics.service";
 import { logger } from "../common/logger";
 import { SUPPORTED_CHAINS, SupportedChain } from "./intents.types";
 import { verifyStellarSignature, buildWsAuthMessage } from "../common/stellar-signature";
@@ -114,6 +115,7 @@ export class IntentsGateway
   constructor(
     private readonly intentsService: IntentsService,
     private readonly solversService: SolversService,
+    @Optional() private readonly metricsService?: MetricsService,
   ) {
     this.heartbeatTimer = setInterval(() => this.heartbeat(), HEARTBEAT_INTERVAL_MS);
     this.backplane = this.createBackplane();
@@ -514,6 +516,7 @@ export class IntentsGateway
    *   (null) — unchained events are always delivered to everyone.
    */
   async broadcast(event: { type: string; [key: string]: unknown }): Promise<void> {
+    const enqueuedAt = Date.now();
     const seq = this.nextSeq++;
     const sequencedEvent: SequencedEvent = { ...event, seq };
 
@@ -532,6 +535,12 @@ export class IntentsGateway
 
     const payload = JSON.stringify(sequencedEvent);
     this.deliverToMatchingSubscribers(payload, eventChain);
+    // SLO SLI (issue #480): WS end-to-end delivery latency.
+    try {
+      this.metricsService?.observeWsDelivery((Date.now() - enqueuedAt) / 1000);
+    } catch {
+      // Metrics must never break broadcasts.
+    }
   }
 
   getAliveCount(): number {

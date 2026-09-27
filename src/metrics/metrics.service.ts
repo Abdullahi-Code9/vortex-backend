@@ -11,6 +11,10 @@ export class MetricsService implements OnModuleInit {
   public readonly httpRequestErrors: client.Counter<string>;
   public readonly intentStateTransitions: client.Counter<string>;
   public readonly wsConnections: client.Gauge<string>;
+  public readonly intentCreateDuration: client.Histogram<string>;
+  public readonly wsDeliveryDuration: client.Histogram<string>;
+  public readonly eventIngestionLag: client.Gauge<string>;
+  public readonly txConfirmationDuration: client.Histogram<string>;
 
   /**
    * Sweeper metrics — these replace the retired src/common/metrics.ts
@@ -79,6 +83,35 @@ export class MetricsService implements OnModuleInit {
       buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000],
       registers: [this.register],
     });
+
+    // ── SLO SLIs (issue #480) ───────────────────────────────────────────────
+    this.intentCreateDuration = new client.Histogram({
+      name: `${prefix}intent_create_duration_seconds`,
+      help: "Intent-create handler latency in seconds",
+      labelNames: ["route"],
+      buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+      registers: [this.register],
+    });
+
+    this.wsDeliveryDuration = new client.Histogram({
+      name: `${prefix}ws_delivery_duration_seconds`,
+      help: "WS end-to-end delivery latency (broadcast to send) in seconds",
+      buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+      registers: [this.register],
+    });
+
+    this.eventIngestionLag = new client.Gauge({
+      name: `${prefix}event_ingestion_lag_seconds`,
+      help: "Event-ingestion lag: now minus newest ingested event timestamp",
+      registers: [this.register],
+    });
+
+    this.txConfirmationDuration = new client.Histogram({
+      name: `${prefix}tx_confirmation_duration_seconds`,
+      help: "Fill submission to on-chain confirmation latency in seconds",
+      buckets: [1, 5, 15, 30, 60, 120, 300],
+      registers: [this.register],
+    });
   }
 
   onModuleInit() {
@@ -113,5 +146,31 @@ export class MetricsService implements OnModuleInit {
   recordSweep(expiredCount: number, durationMs: number): void {
     this.sweeperExpiredTotal.inc(expiredCount);
     this.sweeperSweepDurationMs.observe(durationMs);
+  }
+
+  /**
+   * Observe intent-create latency (SLO SLI, issue #480).
+   * Call from the create path with handler duration in seconds.
+   */
+  observeIntentCreate(durationSeconds: number, route = "POST /api/v1/intents"): void {
+    this.intentCreateDuration.observe({ route }, durationSeconds);
+  }
+
+  /**
+   * Observe WS end-to-end delivery latency (SLO SLI, issue #480).
+   * Call from the gateway broadcast path with queue-to-send duration.
+   */
+  observeWsDelivery(durationSeconds: number): void {
+    this.wsDeliveryDuration.observe(durationSeconds);
+  }
+
+  /** Set current event-ingestion lag in seconds (SLO SLI, issue #480). */
+  setIngestionLag(lagSeconds: number): void {
+    this.eventIngestionLag.set(lagSeconds);
+  }
+
+  /** Observe fill-to-confirmation latency in seconds (SLO SLI, issue #480). */
+  observeTxConfirmation(durationSeconds: number): void {
+    this.txConfirmationDuration.observe(durationSeconds);
   }
 }

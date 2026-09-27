@@ -11,10 +11,11 @@
 
 1. [Service overview](#service-overview)
 2. [What "normal" looks like](#what-normal-looks-like)
-3. [Scenario A — Soroban RPC downtime](#scenario-a--soroban-rpc-downtime)
-4. [Scenario B — Stuck or slow sweeper](#scenario-b--stuck-or-slow-sweeper)
-5. [Key configuration](#key-configuration)
-6. [Escalation path](#escalation-path)
+3. [SLOs and burn-rate alerts](#slos-and-burn-rate-alerts)
+4. [Scenario A — Soroban RPC downtime](#scenario-a--soroban-rpc-downtime)
+5. [Scenario B — Stuck or slow sweeper](#scenario-b--stuck-or-slow-sweeper)
+6. [Key configuration](#key-configuration)
+7. [Escalation path](#escalation-path)
 
 ---
 
@@ -43,6 +44,27 @@ read endpoints but does **not** take down the intent relay or WebSocket feed.
 | `vortex_sweeper_expired_total` | Monotonically increasing; spikes expected near intent `deadline` clusters |
 | WS subscriber count | Stable or slowly growing; sudden drops indicate client-side churn |
 | Node.js heap | Steady-state < 200 MB; no sustained upward trend between GC cycles |
+
+---
+
+## SLOs and burn-rate alerts (issue #480)
+
+Definitions: `ops/slo/slos.yaml` (OpenSLO). Generated rules:
+`ops/prometheus/rules/vortex-slo.yml`, tested by `vortex-slo_test.yml`.
+
+| SLO | Objective | Alert |
+|---|---|---|
+| Relay availability | 99.9% non-5xx / 30d | `VortexHighBurnRate` (page, 1h/5m) / `VortexSlowBurnRate` (ticket, 6h/30m) |
+| Intent-create latency | p95 < 500ms / 7d | `VortexCreateLatencyHigh` (ticket) |
+| WS delivery latency | p95 < 1s / 7d | covered by availability burn + `vortex:ws:p95_5m` recording rule |
+| Event-ingestion lag | < 30s 99% / 7d | `VortexIngestionLagHigh` (page) |
+| Tx confirmation latency | p95 < 60s / 7d | `vortex:confirm:p95_5m` recording rule, ticket on sustained breach |
+
+SLIs: `vortex_http_requests_total`, `vortex_intent_create_duration_seconds`,
+`vortex_ws_delivery_duration_seconds`, `vortex_event_ingestion_lag_seconds`,
+`vortex_tx_confirmation_duration_seconds` (see `src/metrics/metrics.service.ts`).
+Fast-burn alerts require a minimum throughput (`>100 events/h`) so low-traffic
+periods do not page.
 
 ---
 

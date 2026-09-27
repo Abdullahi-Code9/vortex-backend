@@ -85,8 +85,7 @@ jobs:
             --verbose
 
   backend:
-    name: Backend (Nest) – Node ${{ matrix.node-version }}
-    runs-on: ubuntu-latest
+    name: Backend (Nest) – Node ${{ matrix.node-version }}    runs-on: ubuntu-latest
     strategy:
       matrix:
         node-version: [20, 22]
@@ -157,6 +156,58 @@ jobs:
 
       - name: E2E tests
         run: npm run test:e2e
+
+  # ── TLA+ model checking (issue #471) ─────────────────────────────────────
+  # Bounded TLC run on changes to the spec or the canonical state machine.
+  formal:
+    name: TLA+ model check (TLC, bounded)
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'pull_request' &&
+      (contains(join(github.event.pull_request.labels.*.name, ','), 'formal') ||
+       true)
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run TLC (bounded model)
+        uses: docker://tlaplus/tlaplus:latest
+        with:
+          args: tlc -config formal/IntentLifecycle.cfg formal/IntentLifecycle.tla
+      - name: Upload TLC output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tlc-output
+          path: formal/*.out
+
+  # ── Semgrep custom rules (issue #478) ────────────────────────────────────
+  semgrep:
+    name: Semgrep custom rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: returntocorp/semgrep-action@v1
+        with:
+          config: .semgrep/rules
+          error: true
+      - name: Semgrep rule tests
+        run: |
+          pip install semgrep
+          semgrep --test --config .semgrep/rules .semgrep/tests
+
+  # ── Prometheus rules (issue #480) ────────────────────────────────────────
+  promtool:
+    name: promtool check + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install promtool
+        run: |
+          curl -sL https://github.com/prometheus/prometheus/releases/download/v2.53.0/prometheus-2.53.0.linux-amd64.tar.gz | tar xz
+          sudo mv prometheus-2.53.0.linux-amd64/promtool /usr/local/bin/
+      - name: Check rules
+        run: promtool check rules ops/prometheus/rules/vortex-slo.yml
+      - name: Unit-test rules
+        run: promtool test rules ops/prometheus/rules/vortex-slo_test.yml
 
   # ── Migration rollback verification ────────────────────────────────────────
   # For every prisma/migrations/*/down.sql, applies migration.sql then
