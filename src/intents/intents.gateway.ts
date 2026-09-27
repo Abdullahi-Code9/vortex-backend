@@ -7,6 +7,10 @@ import { MetricsService } from "../metrics/metrics.service";
 import { logger } from "../common/logger";
 import { SUPPORTED_CHAINS, SupportedChain } from "./intents.types";
 import { verifyStellarSignature, buildWsAuthMessage } from "../common/stellar-signature";
+import {
+  WS_MAX_FILTER_CHAINS,
+  WS_MAX_SUBSCRIPTIONS_PER_CONNECTION,
+} from "../config/limits.config";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
@@ -34,6 +38,8 @@ export interface SequencedEvent {
  */
 interface SubscriberFilter {
   chains: Set<SupportedChain> | null;
+  /** Number of `subscribe` messages this connection has sent. */
+  subscriptionCount: number;
 }
 
 /**
@@ -237,7 +243,7 @@ export class IntentsGateway
   }
 
   handleConnection(client: WebSocket) {
-    this.subscribers.set(client, { chains: null });
+    this.subscribers.set(client, { chains: null, subscriptionCount: 0 });
     this.alive.set(client, true);
 
     client.on("message", (raw) => {
@@ -335,6 +341,12 @@ export class IntentsGateway
    * "subscribe to nothing" (the client will receive only chainless events).
    * An entirely missing or non-array `chains` field is rejected silently
    * without updating the existing filter.
+   *
+   * Issue #476: enforces two per-connection limits:
+   * 1. The `chains` array may contain at most `WS_MAX_FILTER_CHAINS` values.
+   * 2. A connection may send at most `WS_MAX_SUBSCRIPTIONS_PER_CONNECTION`
+   *    subscribe messages in its lifetime.  Excess subscribe attempts are
+   *    rejected with a `subscribe_rejected` error frame.
    */
   private handleSubscribe(client: WebSocket, msg: Record<string, unknown>): void {
     if (!Array.isArray(msg.chains)) {
@@ -342,12 +354,57 @@ export class IntentsGateway
       return;
     }
 
-    const validChains = (msg.chains as unknown[]).filter(
+    const filter = this.subscribers.get(client);
+    if (!filter) return;
+
+    // ── Limit 1: max subscriptions per connection (issue #476) ───────────────
+    const maxSubs = parseInt(
+      process.env.WS_MAX_SUBSCRIPTIONS ?? String(WS_MAX_SUBSCRIPTIONS_PER_CONNECTION),
+      10,
+    );
+    if (filter.subscriptionCount >= maxSubs) {
+      logger.warn(
+        `ws subscribe_rejected: connection has reached the max subscription limit (${maxSubs})`,
+      );
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(
+          JSON.stringify({
+            type: "subscribe_rejected",
+            reason: `Maximum subscription limit of ${maxSubs} reached for this connection`,
+          }),
+        );
+      }
+      return;
+    }
+
+    // ── Limit 2: max chain-filter values per subscribe message (issue #476) ──
+    const maxChains = parseInt(
+      process.env.WS_MAX_FILTER_CHAINS ?? String(WS_MAX_FILTER_CHAINS),
+      10,
+    );
+    const rawChains = msg.chains as unknown[];
+    if (rawChains.length > maxChains) {
+      logger.warn(
+        `ws subscribe_rejected: chains array length ${rawChains.length} exceeds max ${maxChains}`,
+      );
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(
+          JSON.stringify({
+            type: "subscribe_rejected",
+            reason: `chains array may contain at most ${maxChains} values`,
+          }),
+        );
+      }
+      return;
+    }
+
+    const validChains = rawChains.filter(
       (c): c is SupportedChain =>
         typeof c === "string" && (SUPPORTED_CHAINS as readonly string[]).includes(c),
     );
 
-    this.subscribers.set(client, { chains: new Set(validChains) });
+    filter.chains = new Set(validChains);
+    filter.subscriptionCount += 1;
 
     logger.debug(`ws client subscribed to chains: ${validChains.join(", ") || "(none)"}`);
 

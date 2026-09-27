@@ -102,6 +102,29 @@ export const envValidationSchema = Joi.object({
   LOG_SHIPPING_SSL: Joi.boolean().default(false),
   LOG_SERVICE_NAME: Joi.string().default("vortex-backend"),
 
+  // ── Resource-exhaustion limits (issue #476) ───────────────────────────────
+  // These values are consumed by src/config/limits.config.ts at startup and
+  // override the compile-time defaults when set.  All have safe defaults so
+  // the service can boot without them.
+
+  /** Max JSON nesting depth before the body is rejected (default 10). */
+  JSON_MAX_DEPTH: Joi.number().integer().min(1).max(100).default(10),
+
+  /** Max WS chain-filter values per subscribe message (default 20). */
+  WS_MAX_FILTER_CHAINS: Joi.number().integer().min(1).max(100).default(20),
+
+  /** Max active subscriptions per WS connection (default 10). */
+  WS_MAX_SUBSCRIPTIONS: Joi.number().integer().min(1).max(100).default(10),
+
+  /** Default Postgres statement_timeout in ms for standard route queries (default 5000). */
+  DB_QUERY_TIMEOUT_MS: Joi.number().integer().min(100).max(60000).default(5000),
+
+  /** Postgres statement_timeout in ms for batch-lookup queries (default 10000). */
+  DB_BATCH_QUERY_TIMEOUT_MS: Joi.number().integer().min(100).max(60000).default(10000),
+
+  /** Postgres statement_timeout in ms for stats/aggregate queries (default 15000). */
+  DB_STATS_QUERY_TIMEOUT_MS: Joi.number().integer().min(100).max(60000).default(15000),
+
   // ── On-chain write safety flag (issue #35 / issue #260) ──────────────────
   // When true, every on-chain-write code path (invokeContract, slashSolver)
   // builds and simulates the transaction, logs what it *would* submit, and

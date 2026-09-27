@@ -30,6 +30,13 @@ function makeConfigService(
     wsMaxConnections: 1000,
     wsBackplane: "memory",
     redisUrl: "redis://localhost:6379",
+    // Resource-exhaustion limits (issue #476) — test defaults
+    jsonMaxDepth: 10,
+    wsMaxFilterChains: 20,
+    wsMaxSubscriptions: 10,
+    dbQueryTimeoutMs: 5000,
+    dbBatchQueryTimeoutMs: 10000,
+    dbStatsQueryTimeoutMs: 15000,
   };
   return {
     get: (key: string) => {

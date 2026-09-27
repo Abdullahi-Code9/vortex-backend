@@ -113,6 +113,20 @@ export interface AppConfig {
   wsMaxConnections: number;
   wsBackplane: "memory" | "redis";
   redisUrl: string;
+
+  // ── Resource-exhaustion limits (issue #476) ───────────────────────────────
+  /** Maximum JSON nesting depth accepted by the body parser middleware. */
+  jsonMaxDepth: number;
+  /** Maximum chain-filter values in a single WS subscribe message. */
+  wsMaxFilterChains: number;
+  /** Maximum concurrent active subscriptions per WS connection. */
+  wsMaxSubscriptions: number;
+  /** Default Postgres statement_timeout (ms) for standard route queries. */
+  dbQueryTimeoutMs: number;
+  /** Postgres statement_timeout (ms) for batch-lookup queries. */
+  dbBatchQueryTimeoutMs: number;
+  /** Postgres statement_timeout (ms) for stats/aggregate queries. */
+  dbStatsQueryTimeoutMs: number;
 }
 
 export default (): AppConfig => ({
@@ -142,4 +156,12 @@ export default (): AppConfig => ({
   wsMaxConnections: parseInt(process.env.WS_MAX_CONNECTIONS ?? "1000", 10),
   wsBackplane: (process.env.WS_BACKPLANE ?? "memory") as "memory" | "redis",
   redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
+
+  // ── Resource-exhaustion limits (issue #476) ───────────────────────────────
+  jsonMaxDepth: parseInt(process.env.JSON_MAX_DEPTH ?? "10", 10),
+  wsMaxFilterChains: parseInt(process.env.WS_MAX_FILTER_CHAINS ?? "20", 10),
+  wsMaxSubscriptions: parseInt(process.env.WS_MAX_SUBSCRIPTIONS ?? "10", 10),
+  dbQueryTimeoutMs: parseInt(process.env.DB_QUERY_TIMEOUT_MS ?? "5000", 10),
+  dbBatchQueryTimeoutMs: parseInt(process.env.DB_BATCH_QUERY_TIMEOUT_MS ?? "10000", 10),
+  dbStatsQueryTimeoutMs: parseInt(process.env.DB_STATS_QUERY_TIMEOUT_MS ?? "15000", 10),
 });
