@@ -6,16 +6,17 @@ import {
   Get,
   NotFoundException,
   Param,
-  Patch,
   Post,
   Query,
 } from "@nestjs/common";
 import { ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
 import { IntentsService } from "../intents/intents.service";
-import { buildDisputeMessage, verifyStellarSignature, buildSolverStatusMessage } from "../common/stellar-signature";
+import { IntentCapabilityIndex } from "../intents/solver-intent-matcher";
+import { buildDisputeMessage, verifyStellarSignature, buildSolverStatusMessage, buildRegisterMessage } from "../common/stellar-signature";
 import { SolversService, LeaderboardWindow } from "./solvers.service";
 import { RegisterSolverDto } from "./dto/register-solver.dto";
 import { UpdateSolverStatusDto } from "./dto/update-solver-status.dto";
+import { ListIntentsDto } from "../intents/dto/list-intents.dto";
 
 const WINDOW_SECONDS: Record<Exclude<LeaderboardWindow, "all">, number> = {
   "24h": 24 * 60 * 60,
@@ -29,11 +30,44 @@ export class SolversController {
   constructor(
     private readonly solversService: SolversService,
     private readonly intentsService: IntentsService,
+    private readonly intentIndex: IntentCapabilityIndex,
   ) {}
 
   @Post()
   async register(@Body() dto: RegisterSolverDto) {
     verifyStellarSignature(dto.address, buildRegisterMessage(dto.address), dto.proofSignature);
+
+    const onchainEnabled = (process.env.ONCHAIN_INTENTS_ENABLED ?? "false") === "true";
+
+    if (onchainEnabled) {
+      // Issue #399: when on-chain intents are enabled, POST /solvers is a
+      // metadata-only endpoint.  Bond amount is authoritative on-chain; the
+      // REST endpoint may not set it.  Supported chains/tokens and name are
+      // still accepted and merged into any existing record.
+      const existing = await this.solversService.get(dto.address);
+      if (existing) {
+        // Update metadata fields only — bond unchanged.
+        return this.solversService.register({
+          address: dto.address,
+          name: dto.name,
+          bondAmount: existing.bondAmount, // preserve on-chain bond
+          avgFillTime: dto.avgFillTime,
+          isActive: existing.isActive,
+          supportedChains: dto.supportedChains,
+          supportedTokens: dto.supportedTokens,
+        });
+      }
+      // First-time metadata registration (bond will be set by on-chain event).
+      return this.solversService.register({
+        address: dto.address,
+        name: dto.name,
+        bondAmount: "0", // bond is always set by chain events when ONCHAIN_INTENTS_ENABLED
+        avgFillTime: dto.avgFillTime,
+        isActive: true,
+        supportedChains: dto.supportedChains,
+        supportedTokens: dto.supportedTokens,
+      });
+    }
 
     return this.solversService.register({
       address: dto.address,
@@ -126,10 +160,9 @@ export class SolversController {
     if (!solver) throw new NotFoundException("Solver not found");
     if (!solver.isActive) throw new ForbiddenException("Solver is not active");
 
-    const open = await this.intentsService.getByState("open");
-    const eligible = open.filter((intent) =>
-      solverSupports(solver, intent.srcChain, intent.srcToken.symbol),
-    );
+    // Use the capability index for O(supported-chains × supported-tokens)
+    // lookup instead of scanning all open intents (issue #436).
+    const eligible = this.intentIndex.getEligibleFor(solver);
 
     const limit = Math.min(dto.limit ?? 20, 100);
     const offset = dto.offset ?? 0;

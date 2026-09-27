@@ -6,11 +6,11 @@ import { IntentsGateway } from "./intents.gateway";
 import { IntentsSweeperService } from "./intents-sweeper.service";
 import { INTENTS_REPOSITORY, InMemoryIntentsRepository } from "./intents.repository";
 import { PrismaIntentsRepository } from "./prisma-intents.repository";
+import { IntentCapabilityIndex } from "./solver-intent-matcher";
 import { SolversModule } from "../solvers/solvers.module";
 import { RoutingModule } from "../routing/routing.module";
 import { TokensModule } from "../tokens/tokens.module";
 import { SorobanModule } from "../soroban/soroban.module";
-import { EventIngestionService } from "../soroban/event-ingestion.service";
 import { AppConfig } from "../config/configuration";
 import { PrismaService } from "../prisma/prisma.service";
 
@@ -33,10 +33,12 @@ import { PrismaService } from "../prisma/prisma.service";
       },
     },
     IntentsService,
+    IntentCapabilityIndex,
     IntentsGateway,
     IntentsSweeperService,
-    EventIngestionService,
+    // Note: EventIngestionService is provided by SorobanModule (imported above)
+    // and exported from there — no re-declaration needed here.
   ],
-  exports: [IntentsService, IntentsGateway],
+  exports: [IntentsService, IntentsGateway, IntentCapabilityIndex],
 })
 export class IntentsModule {}

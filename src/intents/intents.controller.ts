@@ -572,7 +572,7 @@ export class IntentsController {
       );
     }
 
-    const solvers = this.solversService.getAll().filter((s) => s.isActive);
+    const solvers = (await this.solversService.getAll()).filter((s) => s.isActive);
     const srcToken = intent.srcToken;
     const dstToken = intent.dstToken;
     const srcAmountBigInt = BigInt(intent.srcAmount);
