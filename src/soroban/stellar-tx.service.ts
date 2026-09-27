@@ -12,6 +12,12 @@ import {
 import { AppConfig, FeePercentile } from "../config/configuration";
 import { SorobanService } from "./soroban.service";
 import { SignerService } from "./signer.service";
+import { KillSwitchService } from "../killswitch/killswitch.service";
+import {
+  assertNotPaused,
+  KillSwitchActiveException,
+} from "../killswitch/killswitch.guard";
+import { STELLAR_CHAIN } from "../intents/intents.types";
 
 export interface FeeEstimate {
   /** Classic inclusion fee, in stroops. */
@@ -47,6 +53,7 @@ export class StellarTxService {
   constructor(
     private readonly sorobanService: SorobanService,
     configService: ConfigService<AppConfig, true>,
+    private readonly killSwitch: KillSwitchService,
   ) {
     this.feePercentile = configService.get("stellar.feePercentile", { infer: true });
     this.dryRun = configService.get("onchainDryRun", { infer: true });
@@ -130,6 +137,14 @@ export class StellarTxService {
    * contract interface is finalised (see docs/architecture/onchain-settlement.md).
    */
   async invokeContract(params: InvokeContractParams): Promise<InvokeContractResult> {
+    // Issue #477 — the last gate before anything touches the chain. Checking
+    // here rather than only in controllers also covers background callers (the
+    // sweeper, event ingestion) that never pass through an HTTP guard.
+    //
+    // Evaluated before the dry-run branch so a pause is visible in logs even
+    // while on-chain writes are simulated.
+    this.assertOnChainWriteAllowed(params.method);
+
     if (this.dryRun) {
       this.logger.log(
         `[dry-run] invokeContract contractId=${params.contractId} method=${params.method} ` +
@@ -164,5 +179,34 @@ export class StellarTxService {
       fee,
       networkPassphrase: transaction.networkPassphrase,
     }).build();
+  }
+
+  /**
+   * Throws when an emergency pause covers this on-chain write.
+   *
+   * `onchain` is evaluated rather than the caller's nominal operation, because
+   * this is the single point every chain write funnels through — pausing
+   * `onchain` must stop all of them, whichever method they use.
+   */
+  private assertOnChainWriteAllowed(method: string): void {
+    try {
+      assertNotPaused(this.killSwitch, {
+        // Deliberately the protocol chain, not `stellar.network`. Switch scopes
+        // are addressed with the chain an intent names ("stellar"); the network
+        // ("testnet"/"mainnet") selects a Soroban endpoint and would never match
+        // a `chain=stellar` pause.
+        chain: STELLAR_CHAIN,
+        token: null,
+        operation: "onchain",
+      });
+    } catch (err) {
+      if (err instanceof KillSwitchActiveException) {
+        this.logger.warn(
+          `On-chain write blocked by kill-switch: method=${method} ` +
+            `scope=${err.scope} reason=${err.reasonCode}`,
+        );
+      }
+      throw err;
+    }
   }
 }

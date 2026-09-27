@@ -10,12 +10,20 @@ import { SolversModule } from "../solvers/solvers.module";
 import { RoutingModule } from "../routing/routing.module";
 import { TokensModule } from "../tokens/tokens.module";
 import { SorobanModule } from "../soroban/soroban.module";
-import { EventIngestionService } from "../soroban/event-ingestion.service";
 import { AppConfig } from "../config/configuration";
 import { PrismaService } from "../prisma/prisma.service";
 
 @Module({
-  imports: [forwardRef(() => SolversModule), RoutingModule, TokensModule, SorobanModule],
+  // Both SolversModule and SorobanModule import IntentsModule back, so both
+  // edges of each cycle must be deferred — a bare import resolves to `undefined`
+  // when the peer module is still mid-initialization (AppModule reaches
+  // SorobanModule through HealthModule before IntentsModule has finished).
+  imports: [
+    forwardRef(() => SolversModule),
+    RoutingModule,
+    TokensModule,
+    forwardRef(() => SorobanModule),
+  ],
   controllers: [IntentsController],
   providers: [
     // Select the persistence adapter based on INTENTS_PERSISTENCE env var.
@@ -35,7 +43,6 @@ import { PrismaService } from "../prisma/prisma.service";
     IntentsService,
     IntentsGateway,
     IntentsSweeperService,
-    EventIngestionService,
   ],
   exports: [IntentsService, IntentsGateway],
 })

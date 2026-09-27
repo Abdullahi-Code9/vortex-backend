@@ -22,6 +22,16 @@ export interface SlashRecord {
 }
 
 /**
+ * The subset of {@link SolverRecord} a solver is allowed to change about
+ * itself. Every other field (address, bond, fill counters, volume,
+ * registeredAt, isActive) is immutable and is never accepted here.
+ */
+export type MutableSolverProfile = Pick<
+  SolverRecord,
+  "name" | "supportedChains" | "supportedTokens" | "avgFillTime"
+>;
+
+/**
  * Orchestration layer for solver records.
  *
  * Business logic (counter initialisation, timestamp generation) lives here.
@@ -47,6 +57,37 @@ export class SolversService {
 
   async get(address: string): Promise<SolverRecord | undefined> {
     return this.repo.findByAddress(address);
+  }
+
+  /**
+   * Apply a partial patch to a solver's *mutable* profile fields (issue #273).
+   *
+   * Array fields (`supportedChains`, `supportedTokens`) are replaced wholesale
+   * rather than merged — the API is a PATCH over a full replacement list, and
+   * a merge would make it impossible to drop a chain.
+   *
+   * Keys whose value is `undefined` are skipped, so a caller that spreads a
+   * partially-populated DTO cannot accidentally blank out an existing value.
+   * Immutable fields are structurally impossible to set: the patch type only
+   * admits {@link MutableSolverProfile}.
+   *
+   * @returns the updated record, or `undefined` when no solver has that address.
+   */
+  async update(
+    address: string,
+    patch: Partial<MutableSolverProfile>,
+  ): Promise<SolverRecord | undefined> {
+    const solver = await this.repo.findByAddress(address);
+    if (!solver) return undefined;
+
+    const applied: Partial<MutableSolverProfile> = {};
+    if (patch.name !== undefined) applied.name = patch.name;
+    if (patch.avgFillTime !== undefined) applied.avgFillTime = patch.avgFillTime;
+    if (patch.supportedChains !== undefined) applied.supportedChains = patch.supportedChains;
+    if (patch.supportedTokens !== undefined) applied.supportedTokens = patch.supportedTokens;
+
+    const updated: SolverRecord = { ...solver, ...applied };
+    return this.repo.save(updated);
   }
 
   async register(
@@ -99,6 +140,48 @@ export class SolversService {
     const solver = await this.repo.findByAddress(address);
     if (!solver) return null;
     const updated = { ...solver, isActive: true };
+    return this.repo.save(updated);
+  }
+
+  /**
+   * Records a successful fill for `address`.
+   *
+   * Bumps `fillsCompleted`, adds `fillAmount` to the cumulative `totalVolume`,
+   * and refreshes `lastActiveAt` so liveness checks reflect the fill. All
+   * arithmetic stays in bigint so a large fill cannot lose precision; the
+   * rolling `avgFillTime` is intentionally left alone because only the
+   * controller has the accept→fill elapsed time and passing it through on
+   * every fill is not currently wired up.
+   *
+   * @param address    Solver address.
+   * @param fillAmount Fill amount in the destination token's base units. When
+   *                   omitted, volume is left unchanged (counters still move).
+   * @returns the updated record, or `null` when the solver is unknown.
+   */
+  async recordSuccessfulFill(address: string, fillAmount?: string): Promise<SolverRecord | null> {
+    const solver = await this.repo.findByAddress(address);
+    if (!solver) return null;
+
+    const now = Math.floor(Date.now() / 1000);
+    let totalVolume = solver.totalVolume;
+    if (fillAmount !== undefined) {
+      try {
+        totalVolume = (BigInt(solver.totalVolume) + BigInt(fillAmount)).toString();
+      } catch {
+        // A malformed amount must not lose the fill counter — log and keep
+        // the existing volume rather than throwing inside a request path.
+        this.logger.error(
+          `[volume] ignoring non-integer fillAmount="${fillAmount}" for solver=${address}`,
+        );
+      }
+    }
+
+    const updated: SolverRecord = {
+      ...solver,
+      fillsCompleted: solver.fillsCompleted + 1,
+      totalVolume,
+      lastActiveAt: now,
+    };
     return this.repo.save(updated);
   }
 

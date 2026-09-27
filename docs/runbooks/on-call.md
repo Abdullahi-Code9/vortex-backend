@@ -14,8 +14,9 @@
 3. [SLOs and burn-rate alerts](#slos-and-burn-rate-alerts)
 4. [Scenario A — Soroban RPC downtime](#scenario-a--soroban-rpc-downtime)
 5. [Scenario B — Stuck or slow sweeper](#scenario-b--stuck-or-slow-sweeper)
-6. [Key configuration](#key-configuration)
-7. [Escalation path](#escalation-path)
+6. [Scenario C — Emergency kill-switch](#scenario-c--emergency-killswitch-issue-477)
+7. [Key configuration](#key-configuration)
+8. [Escalation path](#escalation-path)
 
 ---
 
@@ -265,6 +266,75 @@ curl -s http://localhost:4000/api/v1/intents?state=open | jq '[.intents[] | sele
 
 ---
 
+## Scenario C - Emergency kill-switch (issue #477)
+
+Use this whenever the safe move is to stop writing: a depegged token, a
+compromised or misbehaving solver, a chain/RPC incident, or any anomaly where you
+would rather freeze than keep settling.
+
+The full procedure, API reference, and failure modes are in
+**[killswitch.md](./killswitch.md)**. The short version:
+
+```bash
+KS=http://localhost:4000/api/v1/ops/killswitch
+
+# 1. Inspect current state first.
+curl -s "$KS" -H "x-operator-token: $TOKEN" | jq
+
+# 2. Pause the narrowest scope that covers the problem. Start narrow.
+curl -sX POST "$KS/pause" \
+  -H "x-operator-token: $TOKEN" -H "x-operator-id: $ME" \
+  -H 'content-type: application/json' \
+  -d '{"scope":"chain","chain":"stellar","reasonCode":"CHAIN_DEGRADED","reason":"RPC errors >20%"}'
+```
+
+Scopes are `global`, `chain`, `token`, and `operation`; operations are `create`,
+`accept`, `fill`, `slash`, and `onchain`. Pausing `onchain` stops every write
+that reaches the chain.
+
+### Verifying it took effect
+
+Blocked writes return **503** with `Retry-After` and a `reason` code. Check
+every replica, not just the one you called:
+
+```bash
+for port in 4000 4001 4002; do
+  curl -s localhost:$port/health | jq -c '{port:'"$port"', killswitch}'
+done
+```
+
+A pause is an operational state, not an outage — `/health` keeps reporting
+`status: "ok"`. Use the `killswitch` block, and the `propagation` field, to tell
+"paused" apart from "healthy".
+
+Watch the sweeper logs: while `fill` is paused it must log deadline extensions
+rather than slashes.
+
+```bash
+docker logs vortex 2>&1 | grep -E "Kill-switch|sweeper.*paused"
+```
+
+### Resuming
+
+Two **different** operators must approve, and the broadest scope goes first:
+
+```bash
+curl -sX POST "$KS/resume/$SWITCH_ID" -H "x-operator-token: $TOKEN" \
+  -H "x-operator-id: $ME" -H 'content-type: application/json' -d '{}'
+# -> {"resumed": false, "approvals": 1, "required": 2}
+```
+
+`resumed: false` means "recorded, not yet reopened" — that is expected after the
+first approval.
+
+### If the switch itself is the problem
+
+If writes are being refused but no switch is listed, the replica has not loaded
+its snapshot and is failing closed. `ready: false` in `/health` points at the
+database. See "Failure modes" in [killswitch.md](./killswitch.md).
+
+---
+
 ## Key configuration
 
 | Variable | Default | Effect |
@@ -274,6 +344,10 @@ curl -s http://localhost:4000/api/v1/intents?state=open | jq '[.intents[] | sele
 | `PORT` | `4000` | HTTP + WS listen port |
 | `NODE_ENV` | `development` | Log verbosity (set to `production` in prod) |
 | `SWEEP_INTERVAL_MS` | `30000` (hardcoded) | How often the sweeper runs; change requires code deploy |
+| `KILLSWITCH_OPERATOR_TOKEN` | empty (control plane disabled) | Secret for `/api/v1/ops/killswitch`; **required in production** |
+| `KILLSWITCH_REDIS_URL` | `REDIS_URL` when `WS_BACKPLANE=redis` | Cross-replica pause propagation; empty = poll only |
+| `KILLSWITCH_POLL_MS` | `2000` | DB change-probe interval backing up Redis; caps propagation delay |
+| `KILLSWITCH_PERSISTENCE` | `memory` | `prisma` in production, or a pause is lost on restart |
 
 ---
 

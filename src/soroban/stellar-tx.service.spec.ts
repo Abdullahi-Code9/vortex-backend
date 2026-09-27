@@ -13,6 +13,7 @@ import { ConfigService } from "@nestjs/config";
 import { StellarTxService } from "./stellar-tx.service";
 import { SorobanService } from "./soroban.service";
 import { AppConfig } from "../config/configuration";
+import { KillSwitchService } from "../killswitch/killswitch.service";
 
 function buildTestTransaction(fee = "100"): Transaction {
   const keypair = Keypair.random();
@@ -64,7 +65,11 @@ function simulationError(message: string): SorobanRpc.Api.SimulateTransactionErr
 describe("StellarTxService", () => {
   let sorobanService: jest.Mocked<Pick<SorobanService, "getFeeStats" | "simulateTransaction" | "prepareTransaction">>;
   let configService: jest.Mocked<Pick<ConfigService<AppConfig, true>, "get">>;
+  let killSwitch: { evaluateTarget: jest.Mock };
   let service: StellarTxService;
+
+  /** Default: no pause active, so pre-existing behaviour is unchanged. */
+  const notPaused = { paused: false, matched: null, matchedChain: [] };
 
   beforeEach(() => {
     sorobanService = {
@@ -73,9 +78,11 @@ describe("StellarTxService", () => {
       prepareTransaction: jest.fn(),
     };
     configService = { get: jest.fn().mockReturnValue("p50") };
+    killSwitch = { evaluateTarget: jest.fn().mockReturnValue(notPaused) };
     service = new StellarTxService(
       sorobanService as unknown as SorobanService,
       configService as unknown as ConfigService<AppConfig, true>,
+      killSwitch as unknown as KillSwitchService,
     );
   });
 
@@ -146,6 +153,7 @@ describe("StellarTxService", () => {
       const dryRunService = new StellarTxService(
         sorobanService as unknown as SorobanService,
         dryRunConfigService,
+        killSwitch as unknown as KillSwitchService,
       );
 
       const result = await dryRunService.invokeContract({
@@ -173,6 +181,7 @@ describe("StellarTxService", () => {
       const liveService = new StellarTxService(
         sorobanService as unknown as SorobanService,
         liveConfigService,
+        killSwitch as unknown as KillSwitchService,
       );
 
       await expect(

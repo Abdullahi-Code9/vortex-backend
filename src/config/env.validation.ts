@@ -5,6 +5,15 @@ import * as Joi from "joi";
 // it does not by itself prove the key is a *real, funded* signer.
 const STELLAR_SECRET_KEY_PATTERN = /^S[A-Z2-7]{55}$/;
 
+// One message for both "absent" and "empty". Joi's .required() alone accepts an
+// empty string, which for the kill-switch would be a silently disabled control
+// plane — the exact condition this rule exists to prevent, so both cases must
+// produce the same actionable error.
+const KILLSWITCH_TOKEN_REQUIRED_MESSAGE =
+  "KILLSWITCH_OPERATOR_TOKEN must be a non-empty secret in production so the " +
+  "emergency pause control plane (/api/v1/ops/killswitch) is usable. Generate " +
+  "one with `openssl rand -hex 32`. See docs/runbooks/killswitch.md.";
+
 export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string().valid("development", "production", "test").default("development"),
   PORT: Joi.number().port().default(4000),
@@ -101,6 +110,68 @@ export const envValidationSchema = Joi.object({
   LOG_SHIPPING_PATH: Joi.string().default("/"),
   LOG_SHIPPING_SSL: Joi.boolean().default(false),
   LOG_SERVICE_NAME: Joi.string().default("vortex-backend"),
+
+  // ── Resource-exhaustion limits (issue #476) ───────────────────────────────
+  // These values are consumed by src/config/limits.config.ts at startup and
+  // override the compile-time defaults when set.  All have safe defaults so
+  // the service can boot without them.
+
+  /** Max JSON nesting depth before the body is rejected (default 10). */
+  JSON_MAX_DEPTH: Joi.number().integer().min(1).max(100).default(10),
+
+  /** Max WS chain-filter values per subscribe message (default 20). */
+  WS_MAX_FILTER_CHAINS: Joi.number().integer().min(1).max(100).default(20),
+
+  /** Max active subscriptions per WS connection (default 10). */
+  WS_MAX_SUBSCRIPTIONS: Joi.number().integer().min(1).max(100).default(10),
+
+  /** Default Postgres statement_timeout in ms for standard route queries (default 5000). */
+  DB_QUERY_TIMEOUT_MS: Joi.number().integer().min(100).max(60000).default(5000),
+
+  /** Postgres statement_timeout in ms for batch-lookup queries (default 10000). */
+  DB_BATCH_QUERY_TIMEOUT_MS: Joi.number().integer().min(100).max(60000).default(10000),
+
+  /** Postgres statement_timeout in ms for stats/aggregate queries (default 15000). */
+  DB_STATS_QUERY_TIMEOUT_MS: Joi.number().integer().min(100).max(60000).default(15000),
+
+  // ── Emergency kill-switch (issue #477) ─────────────────────────────────────
+  // Shared secret for the operator control plane. Empty (the default) leaves
+  // /api/v1/ops/killswitch disabled — fail closed, never open.
+  //
+  // The kill-switch is the only way to stop writes at runtime, so a production
+  // deploy without a token ships a protocol that cannot be paused. Requiring it
+  // in production fails validation rather than silently running with the
+  // control plane disabled.
+  KILLSWITCH_OPERATOR_TOKEN: Joi.string()
+    .when("NODE_ENV", {
+      is: Joi.valid("production"),
+      then: Joi.string()
+        .required()
+        .invalid("")
+        .messages({
+          "any.required": KILLSWITCH_TOKEN_REQUIRED_MESSAGE,
+          "string.empty": KILLSWITCH_TOKEN_REQUIRED_MESSAGE,
+          "any.invalid": KILLSWITCH_TOKEN_REQUIRED_MESSAGE,
+        }),
+      otherwise: Joi.string().allow("").default(""),
+    }),
+
+  /**
+   * Redis URL for cross-replica pause propagation. Empty means "polling only",
+   * which still meets the 5 s budget. Defaults to reusing REDIS_URL when
+   * WS_BACKPLANE=redis, so existing deployments propagate without new config.
+   */
+  KILLSWITCH_REDIS_URL: Joi.string().allow("").optional(),
+
+  /**
+   * DB change-probe interval (ms) that backstops Redis pub/sub. Capped at 5000
+   * so the worst-case propagation delay cannot exceed the requirement, however
+   * misconfigured.
+   */
+  KILLSWITCH_POLL_MS: Joi.number().integer().min(100).max(5000).default(2000),
+
+  // Same adapter-selection convention as the other repositories.
+  KILLSWITCH_PERSISTENCE: Joi.string().valid("memory", "prisma").default("memory"),
 
   // ── On-chain write safety flag (issue #35 / issue #260) ──────────────────
   // When true, every on-chain-write code path (invokeContract, slashSolver)
