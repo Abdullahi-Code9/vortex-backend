@@ -10,18 +10,67 @@ import {
   Post,
   Query,
 } from "@nestjs/common";
-import { ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
+import { ApiNotFoundResponse, ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
 import { IntentsService } from "../intents/intents.service";
-import { buildDisputeMessage, verifyStellarSignature, buildSolverStatusMessage } from "../common/stellar-signature";
+import { SUPPORTED_CHAINS, SupportedChain } from "../intents/intents.types";
+import {
+  buildDisputeMessage,
+  buildRegisterMessage,
+  buildSolverStatusMessage,
+  buildUpdateSolverMessage,
+  verifyStellarSignature,
+} from "../common/stellar-signature";
 import { SolversService, LeaderboardWindow } from "./solvers.service";
+import { SolverRecord } from "./solvers.types";
 import { RegisterSolverDto } from "./dto/register-solver.dto";
+import { UpdateSolverDto } from "./dto/update-solver.dto";
 import { UpdateSolverStatusDto } from "./dto/update-solver-status.dto";
+import { ListIntentsDto } from "../intents/dto/list-intents.dto";
 
 const WINDOW_SECONDS: Record<Exclude<LeaderboardWindow, "all">, number> = {
   "24h": 24 * 60 * 60,
   "7d": 7 * 24 * 60 * 60,
   "30d": 30 * 24 * 60 * 60,
 };
+
+/**
+ * Whether `solver` is able to work `chain`/`tokenSymbol` at all.
+ *
+ * A solver with no declared chains or tokens is treated as unrestricted — that
+ * matches registration defaults, where the fields are optional declarations
+ * of focus rather than a hard allow-list, and it keeps existing solvers
+ * eligible for intents created before the fields existed.
+ *
+ * Matching is case-insensitive on the token symbol because registries and
+ * user-supplied intent payloads disagree on casing (e.g. "USDC" vs "usdc").
+ */
+function solverSupports(
+  solver: SolverRecord,
+  chain: string,
+  tokenSymbol: string,
+): boolean {
+  if (solver.supportedChains.length > 0) {
+    const supportsChain = solver.supportedChains.some(
+      (c: SupportedChain) => c.toLowerCase() === String(chain).toLowerCase(),
+    );
+    if (!supportsChain) return false;
+  }
+
+  if (solver.supportedTokens.length > 0) {
+    const needle = String(tokenSymbol).toLowerCase();
+    const supportsToken = solver.supportedTokens.some(
+      (t: string) => String(t).toLowerCase() === needle,
+    );
+    if (!supportsToken) return false;
+  }
+
+  return true;
+}
+
+/** Guard against chain values that are not part of the supported set. */
+function isSupportedChain(value: string): value is SupportedChain {
+  return (SUPPORTED_CHAINS as readonly string[]).includes(value);
+}
 
 @ApiTags("solvers")
 @Controller("api/v1/solvers")
@@ -127,12 +176,15 @@ export class SolversController {
     if (!solver.isActive) throw new ForbiddenException("Solver is not active");
 
     const open = await this.intentsService.getByState("open");
-    const eligible = open.filter((intent) =>
-      solverSupports(solver, intent.srcChain, intent.srcToken.symbol),
+    const eligible = open.filter(
+      (intent) =>
+        isSupportedChain(intent.srcChain) &&
+        solverSupports(solver, intent.srcChain, intent.srcToken.symbol),
     );
 
     const limit = Math.min(dto.limit ?? 20, 100);
     const offset = dto.offset ?? 0;
+
     if ((dto.limit ?? 20) > 100) {
       throw new BadRequestException("Limit exceeds maximum allowed value of 100");
     }
@@ -142,6 +194,7 @@ export class SolversController {
   }
 
   @Get(":address")
+
   async getSolver(@Param("address") address: string) {
     const solver = await this.solversService.get(address);
     if (!solver) throw new NotFoundException("Solver not found");
@@ -275,11 +328,47 @@ export class SolversController {
   @Post(":address/reactivate")
   async reactivate(@Param("address") address: string, @Body() dto: UpdateSolverStatusDto) {
     verifyStellarSignature(address, buildSolverStatusMessage("reactivate", address), dto.signature);
-
     const solver = await this.solversService.reactivate(address);
     if (!solver) throw new NotFoundException("Solver not found");
     return solver;
   }
+
+  /**
+   * PATCH /api/v1/solvers/:address — issue #273.
+   *
+   * Partial update of the solver's *mutable* profile fields. Requires an
+   * Ed25519 signature over `update-solver:<address>` from the solver's own
+   * key, so a third party cannot rewrite another solver's listing.
+   *
+   * Immutable fields (bond, fill counters, volume, registeredAt, isActive) are
+   * not present on `UpdateSolverDto`, so the global
+   * `ValidationPipe({ whitelist: true })` strips them from the body before the
+   * handler runs — they are silently ignored rather than rejected.
+   */
+  @Patch(":address")
+  @ApiOperation({
+    summary: "Update a solver's mutable profile fields",
+    description:
+      "Partial update of name, supportedChains, supportedTokens and avgFillTime. " +
+      "Requires an Ed25519 signature over the message `update-solver:<address>` " +
+      "produced by the solver's own key. Array fields are replaced wholesale. " +
+      "Immutable fields are silently ignored.",
+  })
+  @ApiNotFoundResponse({ description: "Solver not found" })
+  async update(@Param("address") address: string, @Body() dto: UpdateSolverDto) {
+    verifyStellarSignature(address, buildUpdateSolverMessage(address), dto.signature);
+
+    const updated = await this.solversService.update(address, {
+      name: dto.name,
+      avgFillTime: dto.avgFillTime,
+      supportedChains: dto.supportedChains,
+      supportedTokens: dto.supportedTokens,
+    });
+
+    if (!updated) throw new NotFoundException("Solver not found");
+    return updated;
+  }
+
 
   private normalizeWindow(window?: string): LeaderboardWindow {
     const normalized = (window ?? "all").toLowerCase();

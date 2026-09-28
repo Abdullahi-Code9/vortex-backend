@@ -7,12 +7,20 @@ import { SorobanService } from "./soroban.service";
 import { SolverRegistryService } from "./solver-registry.service";
 import { SignerService } from "./signer.service";
 import { StellarTxService } from "./stellar-tx.service";
+import { IntentsModule } from "../intents/intents.module";
 import { SolversModule } from "../solvers/solvers.module";
 import { IntentsModule } from "../intents/intents.module";
 
 // MetricsModule is @Global() and registered in AppModule, so the MetricsService
 // that ShadowService emits its counters through needs no import here.
 @Module({
+  // IntentsModule → SorobanModule (IntentsService submits settlement writes)
+  // and SorobanModule → IntentsModule (EventIngestionService reconciles
+  // intents from on-chain events). The cycle is broken with forwardRef.
+  // SolversModule supplies SolversService to EventIngestionService and, via
+  // IntentsModule, also participates in the cycle — so it is deferred too.
+  imports: [forwardRef(() => IntentsModule), forwardRef(() => SolversModule)],
+  controllers: [SorobanController],
   // `forwardRef` is required on both sides: EventIngestionService reads an
   // Intent back to date its confirmation metric, so SorobanModule needs
   // IntentsModule, and IntentsModule already needs ShadowService from here.

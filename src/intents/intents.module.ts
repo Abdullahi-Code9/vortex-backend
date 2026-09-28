@@ -10,12 +10,15 @@ import { SolversModule } from "../solvers/solvers.module";
 import { RoutingModule } from "../routing/routing.module";
 import { TokensModule } from "../tokens/tokens.module";
 import { SorobanModule } from "../soroban/soroban.module";
-import { EventIngestionService } from "../soroban/event-ingestion.service";
 import { AppConfig } from "../config/configuration";
 import { PrismaService } from "../prisma/prisma.service";
 import { GovernanceModule } from "../governance/governance.module";
 
 @Module({
+  // Both SolversModule and SorobanModule import IntentsModule back, so both
+  // edges of each cycle must be deferred — a bare import resolves to `undefined`
+  // when the peer module is still mid-initialization (AppModule reaches
+  // SorobanModule through HealthModule before IntentsModule has finished).
   // `forwardRef` on the SorobanModule import mirrors the one in SorobanModule:
   // the two modules need each other (ShadowService here, IntentsService there).
   imports: [
@@ -44,7 +47,6 @@ import { GovernanceModule } from "../governance/governance.module";
     IntentsService,
     IntentsGateway,
     IntentsSweeperService,
-    EventIngestionService,
   ],
   exports: [IntentsService, IntentsGateway],
 })

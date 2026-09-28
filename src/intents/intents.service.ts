@@ -671,6 +671,16 @@ export class IntentsService implements OnModuleDestroy {
     return updated;
   }
 
+  /**
+   * Issue #477 — extend an accepted intent's fill window, used by the sweeper
+   * while an emergency pause blocks fills so the solver is not slashed for a
+   * pause it did not cause. Returns null when the intent is no longer accepted
+   * or already has a later deadline.
+   */
+  async extendDeadlineIfAccepted(id: string, newDeadline: number): Promise<Intent | null> {
+    return this.repo.extendDeadlineIfAccepted(id, newDeadline);
+  }
+
   // ---------------------------------------------------------------------------
   // Audit trail (issue #217 / #62)
   // ---------------------------------------------------------------------------

@@ -138,6 +138,39 @@ export interface AppConfig {
   wsMaxConnections: number;
   wsBackplane: "memory" | "redis";
   redisUrl: string;
+
+  // ── Resource-exhaustion limits (issue #476) ───────────────────────────────
+  /** Maximum JSON nesting depth accepted by the body parser middleware. */
+  jsonMaxDepth: number;
+  /** Maximum chain-filter values in a single WS subscribe message. */
+  wsMaxFilterChains: number;
+  /** Maximum concurrent active subscriptions per WS connection. */
+  wsMaxSubscriptions: number;
+  /** Default Postgres statement_timeout (ms) for standard route queries. */
+  dbQueryTimeoutMs: number;
+  /** Postgres statement_timeout (ms) for batch-lookup queries. */
+  dbBatchQueryTimeoutMs: number;
+  /** Postgres statement_timeout (ms) for stats/aggregate queries. */
+  dbStatsQueryTimeoutMs: number;
+
+  // ── Emergency kill-switch (issue #477) ─────────────────────────────────────
+  killswitch: {
+    /**
+     * Shared secret for the operator control plane (`/api/v1/ops/killswitch`).
+     * Empty disables those routes entirely — the control plane is never open.
+     */
+    operatorToken: string;
+    /**
+     * Redis URL used for cross-replica pause propagation. Empty falls back to
+     * database polling only, which still meets the propagation budget.
+     */
+    redisUrl: string;
+    /**
+     * Interval (ms) for the `max_updated_at` probe that backstops Redis pub/sub.
+     * Worst-case propagation delay is roughly this value, so it must stay
+     * comfortably under the 5 s propagation requirement.
+     */
+    pollMs: number;
   /**
    * Shadow-mode divergence monitor (issue #401).
    *
@@ -214,6 +247,26 @@ export default (): AppConfig => ({
   wsMaxConnections: parseInt(process.env.WS_MAX_CONNECTIONS ?? "1000", 10),
   wsBackplane: (process.env.WS_BACKPLANE ?? "memory") as "memory" | "redis",
   redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
+
+  // ── Resource-exhaustion limits (issue #476) ───────────────────────────────
+  jsonMaxDepth: parseInt(process.env.JSON_MAX_DEPTH ?? "10", 10),
+  wsMaxFilterChains: parseInt(process.env.WS_MAX_FILTER_CHAINS ?? "20", 10),
+  wsMaxSubscriptions: parseInt(process.env.WS_MAX_SUBSCRIPTIONS ?? "10", 10),
+  dbQueryTimeoutMs: parseInt(process.env.DB_QUERY_TIMEOUT_MS ?? "5000", 10),
+  dbBatchQueryTimeoutMs: parseInt(process.env.DB_BATCH_QUERY_TIMEOUT_MS ?? "10000", 10),
+  dbStatsQueryTimeoutMs: parseInt(process.env.DB_STATS_QUERY_TIMEOUT_MS ?? "15000", 10),
+
+  // ── Emergency kill-switch (issue #477) ─────────────────────────────────────
+  killswitch: {
+    operatorToken: process.env.KILLSWITCH_OPERATOR_TOKEN ?? "",
+    // Reuse the WS backplane URL when set; an explicit empty value opts out of
+    // Redis entirely and leaves propagation to database polling.
+    redisUrl:
+      process.env.KILLSWITCH_REDIS_URL ??
+      (process.env.REDIS_URL && process.env.WS_BACKPLANE === "redis" ? process.env.REDIS_URL : ""),
+    // 2000 ms + request latency stays well inside the 5 s propagation budget
+    // even when Redis is unavailable.
+    pollMs: parseInt(process.env.KILLSWITCH_POLL_MS ?? "2000", 10),
   shadow: {
     // Off by default: the monitor costs one simulation per sampled transition,
     // so it is opt-in per environment rather than something a deployer

@@ -370,7 +370,7 @@ describe("IntentsService", () => {
   describe("on-chain registration (ONCHAIN_INTENTS_ENABLED)", () => {
     it("stays fully in the repository when the flag is off, never touching StellarTxService", async () => {
       const stellarTxService = fakeStellarTxService();
-      const service = makeService({ onchainIntentsEnabled: false }, stellarTxService);
+      const svc = makeService({ onchainIntentsEnabled: false }, stellarTxService);
 
       const intent = await svc.create(validCreateData());
 
@@ -381,7 +381,7 @@ describe("IntentsService", () => {
     it("invokes the settlement contract and preserves the Intent shape when the flag is on", async () => {
       const stellarTxService = fakeStellarTxService();
       stellarTxService.invokeContract.mockResolvedValue({ hash: "deadbeef", status: "SUCCESS" } as never);
-      const service = makeService(
+      const svc = makeService(
         { onchainIntentsEnabled: true, settlementContractId: VALID_CONTRACT_ID },
         stellarTxService,
       );
@@ -414,8 +414,8 @@ describe("IntentsService", () => {
 
     it("rejects with a clear error and does not create the intent when SETTLEMENT_CONTRACT_ID is unset", async () => {
       const stellarTxService = fakeStellarTxService();
-      const service = makeService({ onchainIntentsEnabled: true }, stellarTxService);
-      const before = service.getAll().length;
+      const svc = makeService({ onchainIntentsEnabled: true }, stellarTxService);
+      const before = (await svc.getAll()).length;
 
       await expect(svc.create(validCreateData())).rejects.toMatchObject({
         message: expect.stringContaining("SETTLEMENT_CONTRACT_ID"),
@@ -427,7 +427,7 @@ describe("IntentsService", () => {
     it("rejects and does not create the intent when the on-chain call fails", async () => {
       const stellarTxService = fakeStellarTxService();
       stellarTxService.invokeContract.mockRejectedValue(new Error("submission failed after 5 attempts"));
-      const service = makeService(
+      const svc = makeService(
         { onchainIntentsEnabled: true, settlementContractId: VALID_CONTRACT_ID },
         stellarTxService,
       );
