@@ -245,6 +245,7 @@ export class IntentsGateway
   handleConnection(client: WebSocket) {
     this.subscribers.set(client, { chains: null, subscriptionCount: 0 });
     this.alive.set(client, true);
+    this.metricsService?.incWsConnection();
 
     client.on("message", (raw) => {
       void this.handleMessage(client, raw);
@@ -255,7 +256,7 @@ export class IntentsGateway
     });
 
     client.on("error", () => {
-      this.subscribers.delete(client);
+      this.removeSubscriber(client);
       logger.debug(
         `ws client error/drop — active subscribers: ${this.subscribers.size}`,
       );
@@ -285,9 +286,30 @@ export class IntentsGateway
   }
 
   handleDisconnect(client: WebSocket) {
-    this.subscribers.delete(client);
-    this.authenticatedSolver.delete(client);
+    this.removeSubscriber(client);
     logger.info(`ws client disconnected (subscribers=${this.subscribers.size})`);
+  }
+
+  /**
+   * Drop a client from the subscriber set and keep the connection gauge honest.
+   *
+   * Every path that removes a client goes through here — explicit disconnect,
+   * a transport-level `error`, and the heartbeat terminator — because they are
+   * mutually exclusive in practice but not in the platform: a socket that
+   * errors frequently never reaches `handleDisconnect`, and one that dies
+   * silently is only reaped by the heartbeat. Removing a client from two
+   * places with a bare `subscribers.delete` would leak
+   * `vortex_ws_connections_active` upwards until the process restarts, and a
+   * gauge that only ever climbs turns the WS panels into decoration.
+   *
+   * The gauge is decremented only when this call actually removed something, so
+   * a duplicate disconnect cannot drive it negative.
+   */
+  private removeSubscriber(client: WebSocket): void {
+    const removed = this.subscribers.delete(client);
+    this.authenticatedSolver.delete(client);
+    this.alive.delete(client);
+    if (removed) this.metricsService?.decWsConnection();
   }
 
   /**
@@ -621,7 +643,7 @@ export class IntentsGateway
     for (const [client] of this.subscribers) {
       if (this.alive.get(client) === false) {
         client.terminate();
-        this.subscribers.delete(client);
+        this.removeSubscriber(client);
         logger.debug(
           `ws heartbeat terminated dead client (subscribers=${this.subscribers.size})`,
         );
@@ -639,7 +661,7 @@ export class IntentsGateway
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     for (const [client] of this.subscribers) {
       client.close(1001, "Server shutting down");
+      this.removeSubscriber(client);
     }
-    this.subscribers.clear();
   }
 }

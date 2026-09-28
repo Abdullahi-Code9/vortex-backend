@@ -43,6 +43,12 @@ function makeConfigService(
       operatorToken: "",
       redisUrl: "",
       pollMs: 2000,
+    governance: {
+      paramsContractId: "",
+      paramsPollIntervalMs: 30_000,
+    leaderElection: {
+      enabled: false,
+      heartbeatMs: 5000,
     },
   };
   return {
