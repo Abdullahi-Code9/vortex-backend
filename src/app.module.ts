@@ -10,6 +10,7 @@ import { StatsModule } from "./stats/stats.module";
 import { SorobanModule } from "./soroban/soroban.module";
 import { RoutingModule } from "./routing/routing.module";
 import { PrismaModule } from "./prisma/prisma.module";
+import { GovernanceModule } from "./governance/governance.module";
 import { MetricsModule } from "./metrics/metrics.module";
 import { LeaderElectionModule } from "./common/leader-election";
 
@@ -37,6 +38,7 @@ import { LeaderElectionModule } from "./common/leader-election";
     StatsModule,
     SorobanModule,
     RoutingModule,
+    GovernanceModule,
   ],
   controllers: [],
   providers: [
