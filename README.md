@@ -210,6 +210,78 @@ versus **planned** (schema/token data in place, on-chain settlement pending).
 
 ---
 
+## Performance Testing (k6)
+
+The repo ships a [k6](https://grafana.com/docs/k6/latest/) performance suite
+that gates PRs against latency and error-rate budgets. Results are posted
+automatically as a PR comment and uploaded as CI artifacts.
+
+### Scenarios
+
+| Scenario | File | What it exercises |
+|----------|------|--------------------|
+| `create-intent-burst` | `scenarios/create-intent-burst.js` | POST `/api/v1/intents` burst (20 VUs, 80 s) |
+| `solver-polling` | `scenarios/solver-polling.js` | GET `/api/v1/intents/open` polling (10 VUs, 60 s) |
+| `quote-requests` | `scenarios/quote-requests.js` | POST `/api/v1/intents/quote` ramping arrival rate |
+| `mixed-lifecycle` | `scenarios/mixed-lifecycle.js` | Full read/write cycle (create → poll → read → quote → stats) |
+
+All four run concurrently via `test/perf/k6/all-scenarios.js` in CI.
+
+### Baseline budgets
+
+Budgets live in `test/perf/k6/baselines/all-scenarios.json`. PRs that regress
+any metric beyond **+15% of baseline** fail the `k6-perf` job.
+
+| Metric | p95 budget | p99 budget |
+|--------|-----------|-----------|
+| `http_req_duration` (all) | 500 ms | 1000 ms |
+| `POST /intents` | 200 ms | 400 ms |
+| `GET /intents/open` | 150 ms | 300 ms |
+| `POST /intents/quote` | 200 ms | 500 ms |
+| Full lifecycle cycle | 600 ms | — |
+| Read-only endpoints | 150 ms | — |
+| Global error rate | < 1% | — |
+
+### Running locally
+
+Prerequisites: [k6 installed](https://grafana.com/docs/k6/latest/get-started/installation/)
+and the server running (`npm run dev`).
+
+```bash
+# Run all four scenarios (CI entry point)
+npm run perf
+
+# Run a single scenario
+npm run perf:create-intent
+npm run perf:solver-polling
+npm run perf:quote-requests
+npm run perf:mixed-lifecycle
+
+# Compare the latest run against baselines
+npm run perf:compare
+
+# Update baselines after a known-good run on main
+npm run perf:update-baselines
+
+# Regenerate pre-computed Ed25519 fixture signatures
+npm run perf:gen-fixtures
+```
+
+### Noise control
+
+The CI workflow runs k6 **three times** and uses the last run's summary.
+The +15% tolerance band absorbs run-to-run variation on the fixed-size
+GitHub Actions runner. Baselines are automatically updated on `main` pushes,
+so the reference point always tracks the current head.
+
+### Updating budgets
+
+Edit the `thresholds` section in
+`test/perf/k6/baselines/all-scenarios.json`.  Do not edit `reference` — that
+section is overwritten automatically by `npm run perf:update-baselines`.
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for backend-specific setup, conventions,
