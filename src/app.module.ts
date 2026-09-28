@@ -12,6 +12,9 @@ import { SorobanModule } from "./soroban/soroban.module";
 import { RoutingModule } from "./routing/routing.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { TreasuryModule } from "./treasury/treasury.module";
+import { GovernanceModule } from "./governance/governance.module";
+import { MetricsModule } from "./metrics/metrics.module";
+import { LeaderElectionModule } from "./common/leader-election";
 
 @Module({
   imports: [
@@ -27,6 +30,11 @@ import { TreasuryModule } from "./treasury/treasury.module";
     ScheduleModule.forRoot(),
     ConfigModule,
     PrismaModule,
+    MetricsModule,
+    // Leader election must be initialised before any worker module so that
+    // LeaderElectionService is available when workers call registerWorker()
+    // in their onModuleInit hooks.
+    LeaderElectionModule.forRoot(),
     HealthModule,
     TokensModule,
     IntentsModule,
@@ -35,6 +43,7 @@ import { TreasuryModule } from "./treasury/treasury.module";
     SorobanModule,
     RoutingModule,
     TreasuryModule,
+    GovernanceModule,
   ],
   controllers: [],
   providers: [

@@ -88,6 +88,13 @@ export interface Intent {
   txHash?: string; // fill tx on Stellar
   slashedAt?: number;
   slashReason?: string;
+  /**
+   * Snapshot of the governance-controlled protocol parameters that were active
+   * when this intent was created.  Used to evaluate fee/window terms for
+   * in-flight intents even after a governance update changes the live values.
+   * Absent on intents created before issue #500 was deployed.
+   */
+  paramsVersion?: number;
 }
 
 export interface Quote {

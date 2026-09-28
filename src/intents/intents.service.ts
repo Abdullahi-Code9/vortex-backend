@@ -19,6 +19,7 @@ import {
 } from "../config/configuration";
 import { StellarTxService } from "../soroban/stellar-tx.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { ProtocolParamsService } from "../governance/params.service";
 
 const STORE_SIZE_LOG_INTERVAL_MS = 60_000;
 const TERMINAL_STATES: IntentState[] = ["filled", "cancelled", "expired", "slashed"];
@@ -86,6 +87,7 @@ export class IntentsService implements OnModuleDestroy {
     private readonly configService: ConfigService<AppConfig, true>,
     private readonly stellarTxService: StellarTxService,
     private readonly prisma: PrismaService,
+    private readonly protocolParamsService: ProtocolParamsService,
   ) {
     const sweepMs = Number(this.configService.get("intentRetentionSweepMs", { infer: true }) ?? STORE_SIZE_LOG_INTERVAL_MS);
     this.sizeLogTimer = setInterval(() => this.logStoreSize(), sweepMs || STORE_SIZE_LOG_INTERVAL_MS);
@@ -201,13 +203,19 @@ export class IntentsService implements OnModuleDestroy {
   ): Promise<Intent> {
     const now = Math.floor(Date.now() / 1000);
 
+    // Snapshot governance-controlled parameters at creation time so in-flight
+    // intents are evaluated against the rules that were active when the user
+    // submitted (issue #500).
+    const paramsSnapshot = this.protocolParamsService.snapshotForChain(data.srcChain);
+    const defaultDeadline = data.deadline ?? now + paramsSnapshot.deadlineSeconds;
+
     const intent: Intent = {
       ...data,
       intentId: uuidv4(),
       state: "open",
       createdAt: now,
-      deadline:
-        data.deadline ?? now + (CHAIN_DEADLINE_DEFAULTS[data.srcChain] ?? DEFAULT_DEADLINE_SECONDS),
+      deadline: defaultDeadline,
+      paramsVersion: paramsSnapshot.version,
     };
 
     if (this.configService.get("onchainIntentsEnabled", { infer: true })) {
@@ -323,17 +331,18 @@ export class IntentsService implements OnModuleDestroy {
    * deadline (issue #473). Delegates to the repository so both in-memory and
    * Prisma adapters apply the conditional write atomically.
    *
-   * The new deadline is set to now + CHAIN_FILL_WINDOW_DEFAULTS[srcChain]
-   * so solvers on slower-settling chains get a proportionally longer window
-   * and are not unfairly slashed for a deadline that was never realistic.
+   * The new deadline is set to now + fill window from governance params (or
+   * CHAIN_FILL_WINDOW_DEFAULTS[srcChain] as fallback) so solvers on
+   * slower-settling chains get a proportionally longer window and are not
+   * unfairly slashed for a deadline that was never realistic.
    * Returns null when the intent is not found, not open, or past deadline.
    */
   async acceptIfOpen(id: string, solver: string, now?: number): Promise<Intent | null> {
     const intent = await this.repo.findById(id);
     if (!intent) return null;
     const nowSec = now ?? Math.floor(Date.now() / 1000);
-    const fillWindow =
-      CHAIN_FILL_WINDOW_DEFAULTS[intent.srcChain] ?? DEFAULT_FILL_WINDOW_SECONDS;
+    const snapshot = this.protocolParamsService.snapshotForChain(intent.srcChain);
+    const fillWindow = snapshot.fillWindowSeconds;
     return this.repo.acceptIfOpen(id, solver, nowSec + fillWindow, nowSec);
   }
 

@@ -5,6 +5,7 @@ import { SolversService } from "../solvers/solvers.service";
 import { SolverRegistryService } from "../soroban/solver-registry.service";
 import { logger } from "../common/logger";
 import { MetricsService } from "../metrics/metrics.service";
+import { LeaderElectionService, Singleton } from "../common/leader-election";
 
 const SWEEP_INTERVAL_MS = 30_000;
 
@@ -15,6 +16,7 @@ export interface SweepResult {
   durationMs: number;
 }
 
+@Singleton("sweeper")
 @Injectable()
 export class IntentsSweeperService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(IntentsSweeperService.name);
@@ -26,9 +28,27 @@ export class IntentsSweeperService implements OnModuleInit, OnModuleDestroy {
     private readonly solversService: SolversService,
     private readonly solverRegistryService: SolverRegistryService,
     private readonly metricsService: MetricsService,
+    private readonly leaderElection: LeaderElectionService,
   ) {}
 
   onModuleInit() {
+    this.leaderElection.registerWorker("sweeper", (isLeader, _token) => {
+      if (isLeader) {
+        this.logger.log("[sweeper] became leader — starting interval");
+        this.startInterval();
+      } else {
+        this.logger.log("[sweeper] lost leadership — stopping interval");
+        this.stopInterval();
+      }
+    });
+  }
+
+  onModuleDestroy() {
+    this.stopInterval();
+  }
+
+  private startInterval(): void {
+    if (this.interval) return; // already running
     this.interval = setInterval(() => {
       this.sweep().catch((err) => {
         logger.error(`[sweeper] sweep failed: ${err instanceof Error ? err.message : err}`);
@@ -36,8 +56,11 @@ export class IntentsSweeperService implements OnModuleInit, OnModuleDestroy {
     }, SWEEP_INTERVAL_MS);
   }
 
-  onModuleDestroy() {
-    if (this.interval) clearInterval(this.interval);
+  private stopInterval(): void {
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = undefined;
+    }
   }
 
   async sweep(): Promise<SweepResult> {
