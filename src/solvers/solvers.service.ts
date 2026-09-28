@@ -144,6 +144,73 @@ export class SolversService {
   }
 
   /**
+   * Register a solver from an on-chain SolverRegistered event (issue #399).
+   *
+   * Creates a new solver record with source="chain" and the bond amount
+   * observed on-chain.  Fields not present in the event (name, supported
+   * chains/tokens) are set to sensible defaults and can be updated later via
+   * POST /solvers metadata update.
+   */
+  async registerFromChain(params: {
+    address: string;
+    bondAmount: string;
+    name: string;
+    isActive: boolean;
+    supportedChains: SolverRecord["supportedChains"];
+    supportedTokens: SolverRecord["supportedTokens"];
+    chainUpdatedLedger: number;
+  }): Promise<SolverRecord> {
+    const now = Math.floor(Date.now() / 1000);
+    const solver: SolverRecord = {
+      address: params.address,
+      name: params.name,
+      bondAmount: params.bondAmount,
+      fillsCompleted: 0,
+      fillsFailed: 0,
+      totalVolume: "0",
+      avgFillTime: 0,
+      isActive: params.isActive,
+      registeredAt: now,
+      lastActiveAt: now,
+      supportedChains: params.supportedChains,
+      supportedTokens: params.supportedTokens,
+      source: "chain",
+      chainUpdatedLedger: params.chainUpdatedLedger,
+    };
+    return this.repo.save(solver);
+  }
+
+  /**
+   * Apply a partial update from an on-chain event projection (issue #399).
+   *
+   * Only the fields present in `update` are changed — all other fields remain
+   * as stored.  Guards on chainUpdatedLedger are enforced by the caller
+   * (SolverRegistryEventsService) before this method is called.
+   *
+   * This is the write path for all chain-sourced projections (BondDeposited,
+   * BondWithdrawn, SolverDeactivated, etc.).
+   */
+  async applyChainUpdate(
+    address: string,
+    update: Partial<Pick<SolverRecord, "bondAmount" | "isActive" | "source" | "chainUpdatedLedger">>,
+  ): Promise<SolverRecord | null> {
+    const solver = await this.repo.findByAddress(address);
+    if (!solver) return null;
+    const updated: SolverRecord = { ...solver, ...update, lastActiveAt: Math.floor(Date.now() / 1000) };
+    return this.repo.save(updated);
+  }
+
+  /**
+   * Records that a solver successfully filled an intent.
+   * Increments fillsCompleted and updates lastActiveAt.
+   */
+  async recordSuccessfulFill(address: string): Promise<SolverRecord | null> {
+    const solver = await this.repo.findByAddress(address);
+    if (!solver) return null;
+    const updated = {
+      ...solver,
+      fillsCompleted: solver.fillsCompleted + 1,
+      lastActiveAt: Math.floor(Date.now() / 1000),
    * Records a successful fill for `address`.
    *
    * Bumps `fillsCompleted`, adds `fillAmount` to the cumulative `totalVolume`,

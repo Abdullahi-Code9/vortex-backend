@@ -125,6 +125,32 @@ export const envValidationSchema = Joi.object({
   LOG_SHIPPING_SSL: Joi.boolean().default(false),
   LOG_SERVICE_NAME: Joi.string().default("vortex-backend"),
 
+  // ── Pluggable signer backend (issue #400) ────────────────────────────────
+  // SIGNER_BACKEND selects which signing implementation is used:
+  //   "local"  (default) — LocalKeypairSigner: key loaded from SOROBAN_SIGNING_KEY / file.
+  //                        Refused in production unless ALLOW_LOCAL_SIGNER_IN_PROD=true.
+  //   "vault"            — VaultTransitSigner: signs via HashiCorp Vault Transit (ed25519).
+  //                        Requires VAULT_ADDR + VAULT_TOKEN.  Key never enters RAM.
+  SIGNER_BACKEND: Joi.string().valid("local", "vault").default("local"),
+
+  // Required when SIGNER_BACKEND=vault.
+  VAULT_ADDR: Joi.string().uri({ scheme: ["http", "https"] }).when("SIGNER_BACKEND", {
+    is: "vault",
+    then: Joi.required(),
+    otherwise: Joi.string().allow("").default(""),
+  }),
+  VAULT_TOKEN: Joi.string().when("SIGNER_BACKEND", {
+    is: "vault",
+    then: Joi.required(),
+    otherwise: Joi.string().allow("").default(""),
+  }),
+  // Name of the Vault Transit key (default: "vortex-signer").
+  VAULT_TRANSIT_KEY_NAME: Joi.string().default("vortex-signer"),
+
+  // Escape hatch: allow LocalKeypairSigner in production.
+  // Must be explicitly set to "true" — any other value is treated as false.
+  // A startup warning is emitted when this is enabled in production.
+  ALLOW_LOCAL_SIGNER_IN_PROD: Joi.boolean().default(false),
   // ── Resource-exhaustion limits (issue #476) ───────────────────────────────
   // These values are consumed by src/config/limits.config.ts at startup and
   // override the compile-time defaults when set.  All have safe defaults so

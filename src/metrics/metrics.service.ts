@@ -6,15 +6,18 @@ import { AppConfig } from "../config/configuration";
 @Injectable()
 export class MetricsService implements OnModuleInit {
   private readonly register: client.Registry;
+
+  // ── HTTP ───────────────────────────────────────────────────────────────────
   public readonly httpRequestDuration: client.Histogram<string>;
   public readonly httpRequestTotal: client.Counter<string>;
   public readonly httpRequestErrors: client.Counter<string>;
+
+  // ── Intent / WS general ───────────────────────────────────────────────────
   public readonly intentStateTransitions: client.Counter<string>;
   public readonly wsConnections: client.Gauge<string>;
   public readonly intentCreateDuration: client.Histogram<string>;
   public readonly wsDeliveryDuration: client.Histogram<string>;
   public readonly eventIngestionLag: client.Gauge<string>;
-  public readonly txConfirmationDuration: client.Histogram<string>;
 
   /**
    * Shadow-mode divergence monitor (issue #401).
@@ -46,6 +49,31 @@ export class MetricsService implements OnModuleInit {
    */
   public readonly sweeperExpiredTotal: client.Counter<string>;
   public readonly sweeperSweepDurationMs: client.Histogram<string>;
+
+  // ── SLO SLIs (issue #480) ─────────────────────────────────────────────────
+  public readonly txConfirmationDuration: client.Histogram<string>;
+
+  // ── WS capability-filter metrics (issue #436) ────────────────────────────
+  /**
+   * WS events delivered to an authenticated solver after capability filtering.
+   * Label `solver` is truncated to 12 chars to bound Prometheus label cardinality.
+   */
+  public readonly wsEventsDeliveredTotal: client.Counter<string>;
+  /**
+   * WS events suppressed by the capability filter (intent outside solver's
+   * supported chains/tokens or solver bond = 0).
+   */
+  public readonly wsEventsFilteredTotal: client.Counter<string>;
+
+  // ── Restore-transaction metrics (issue #394) ─────────────────────────────
+  public readonly sorobanRestoreTotal: client.Counter<string>;
+  public readonly sorobanRestoreFeeStroops: client.Histogram<string>;
+
+  // ── Remote signer call latency (issue #400) ───────────────────────────────
+  public readonly signerCallDurationSeconds: client.Histogram<string>;
+
+  // ── Solver-registry event ingestion (issue #399) ──────────────────────────
+  public readonly solverRegistryEventsTotal: client.Counter<string>;
 
   constructor(private readonly configService: ConfigService<AppConfig, true>) {
     this.register = new client.Registry();
@@ -87,11 +115,6 @@ export class MetricsService implements OnModuleInit {
     });
 
     // ── Sweeper metrics (issue #259) ─────────────────────────────────────────
-    // These replace the retired MetricsRegistry.sweeper namespace from
-    // src/common/metrics.ts. They are Prometheus-backed so they appear in
-    // GET /metrics and in any Prometheus/Grafana dashboards without further
-    // adaptation.
-
     this.sweeperExpiredTotal = new client.Counter({
       name: `${prefix}sweeper_expired_total`,
       help: "Total number of intents expired across all sweeps",
@@ -134,6 +157,50 @@ export class MetricsService implements OnModuleInit {
       registers: [this.register],
     });
 
+    // ── WS capability-filter metrics (issue #436) ──────────────────────────
+    this.wsEventsDeliveredTotal = new client.Counter({
+      name: `${prefix}ws_events_delivered_total`,
+      help: "WS events delivered to authenticated solvers after capability filtering",
+      labelNames: ["solver"],
+      registers: [this.register],
+    });
+
+    this.wsEventsFilteredTotal = new client.Counter({
+      name: `${prefix}ws_events_filtered_total`,
+      help: "WS events suppressed by capability filter (intent outside solver's chains/tokens)",
+      labelNames: ["solver"],
+      registers: [this.register],
+    });
+
+    // ── Restore-transaction metrics (issue #394) ───────────────────────────
+    this.sorobanRestoreTotal = new client.Counter({
+      name: `${prefix}soroban_restore_total`,
+      help: "Total RestoreFootprint transactions submitted",
+      labelNames: ["result"],
+      registers: [this.register],
+    });
+
+    this.sorobanRestoreFeeStroops = new client.Histogram({
+      name: `${prefix}soroban_restore_fee_stroops`,
+      help: "Fee paid for RestoreFootprint transactions in stroops",
+      buckets: [1000, 5000, 10000, 50000, 100000, 500000, 1000000],
+      registers: [this.register],
+    });
+
+    // ── Remote signer latency (issue #400) ────────────────────────────────
+    this.signerCallDurationSeconds = new client.Histogram({
+      name: `${prefix}signer_call_duration_seconds`,
+      help: "Remote signer call latency in seconds",
+      labelNames: ["backend", "operation"],
+      buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+      registers: [this.register],
+    });
+
+    // ── Solver-registry event ingestion (issue #399) ──────────────────────
+    this.solverRegistryEventsTotal = new client.Counter({
+      name: `${prefix}solver_registry_events_total`,
+      help: "Solver-registry contract events ingested by type",
+      labelNames: ["event_type"],
     // ── Shadow-mode divergence monitor (issue #401) ──────────────────────────
     this.shadowComparisons = new client.Counter({
       name: `${prefix}shadow_comparisons_total`,
@@ -234,6 +301,38 @@ export class MetricsService implements OnModuleInit {
     this.txConfirmationDuration.observe(durationSeconds);
   }
 
+  // ── WS capability-filter helpers (issue #436) ────────────────────────────
+
+  /** Record a WS event delivered to an authenticated solver (post-filter). */
+  incWsDelivered(solverAddress: string): void {
+    this.wsEventsDeliveredTotal.inc({ solver: solverAddress.slice(0, 12) });
+  }
+
+  /** Record a WS event suppressed for a solver by the capability filter. */
+  incWsFiltered(solverAddress: string): void {
+    this.wsEventsFilteredTotal.inc({ solver: solverAddress.slice(0, 12) });
+  }
+
+  // ── Restore-transaction helpers (issue #394) ──────────────────────────────
+
+  incSorobanRestore(result: "success" | "failed"): void {
+    this.sorobanRestoreTotal.inc({ result });
+  }
+
+  observeRestoreFee(stroops: number): void {
+    this.sorobanRestoreFeeStroops.observe(stroops);
+  }
+
+  // ── Remote signer helpers (issue #400) ────────────────────────────────────
+
+  observeSignerCall(backend: string, operation: string, durationSeconds: number): void {
+    this.signerCallDurationSeconds.observe({ backend, operation }, durationSeconds);
+  }
+
+  // ── Solver-registry event ingestion helpers (issue #399) ─────────────────
+
+  incSolverRegistryEvent(eventType: string): void {
+    this.solverRegistryEventsTotal.inc({ event_type: eventType });
   /**
    * Record one resolved shadow-mode comparison (issue #401).
    *

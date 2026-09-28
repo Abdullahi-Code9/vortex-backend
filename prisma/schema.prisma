@@ -131,6 +131,14 @@ model Solver {
   /// Token symbols this solver can handle.
   supportedTokens  Json     @map("supported_tokens")
 
+  // ── On-chain projection fields (issue #399) ───────────────────────────────
+  /// Indicates the authoritative data source: "api" (REST registration) or
+  /// "chain" (projected from solver-registry contract events).
+  source           String   @default("api") @map("source")
+  /// Ledger sequence of the most recent on-chain event that updated this row.
+  /// NULL when source="api" (no on-chain event has been observed yet).
+  chainUpdatedLedger Int?   @map("chain_updated_ledger")
+
   @@index([isActive])
   @@map("solvers")
 }
