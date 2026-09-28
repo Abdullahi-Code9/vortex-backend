@@ -31,6 +31,11 @@ export class MetricsService implements OnModuleInit {
   public readonly shadowDivergences: client.Counter<string>;
   public readonly shadowDropped: client.Counter<string>;
   public readonly shadowQueueDepth: client.Gauge<string>;
+   * Leader election metrics (issue #493).
+   * Track which replica is leader per worker and how often leadership changes.
+   */
+  public readonly leaderElectionIsLeader: client.Gauge<string>;
+  public readonly leaderElectionChangesTotal: client.Counter<string>;
 
   /**
    * Sweeper metrics — these replace the retired src/common/metrics.ts
@@ -153,6 +158,18 @@ export class MetricsService implements OnModuleInit {
     this.shadowQueueDepth = new client.Gauge({
       name: `${prefix}shadow_queue_depth`,
       help: "Current number of queued shadow-mode observations awaiting simulation",
+    // ── Leader election metrics (issue #493) ─────────────────────────────────
+    this.leaderElectionIsLeader = new client.Gauge({
+      name: `${prefix}leader_election_is_leader`,
+      help: "1 when this replica is the current leader for the named worker, 0 otherwise",
+      labelNames: ["worker"],
+      registers: [this.register],
+    });
+
+    this.leaderElectionChangesTotal = new client.Counter({
+      name: `${prefix}leader_election_changes_total`,
+      help: "Total number of leadership transitions (acquisitions + losses) per worker",
+      labelNames: ["worker", "transition"],
       registers: [this.register],
     });
   }
@@ -248,5 +265,20 @@ export class MetricsService implements OnModuleInit {
   /** Publish the current shadow queue depth. */
   setShadowQueueDepth(depth: number): void {
     this.shadowQueueDepth.set(depth);
+   * Record that this replica acquired leadership for `workerName`.
+   * Sets the is_leader gauge to 1 and increments the acquisition counter.
+   */
+  recordLeadershipAcquired(workerName: string): void {
+    this.leaderElectionIsLeader.set({ worker: workerName }, 1);
+    this.leaderElectionChangesTotal.inc({ worker: workerName, transition: "acquired" });
+  }
+
+  /**
+   * Record that this replica lost leadership for `workerName`.
+   * Sets the is_leader gauge to 0 and increments the lost counter.
+   */
+  recordLeadershipLost(workerName: string): void {
+    this.leaderElectionIsLeader.set({ worker: workerName }, 0);
+    this.leaderElectionChangesTotal.inc({ worker: workerName, transition: "lost" });
   }
 }

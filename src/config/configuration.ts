@@ -102,6 +102,7 @@ export interface AppConfig {
   stellar: {
     network: "testnet" | "futurenet" | "mainnet";
     sorobanRpcUrl: string;
+    horizonUrl: string;
     settlementContractId: string;
     solverRegistryContractId: string;
     signerSecretKey: string;
@@ -112,6 +113,9 @@ export interface AppConfig {
     signingKey: string;
     /** Fee percentile to use when estimating Soroban inclusion fees. */
     feePercentile: FeePercentile;
+  };
+  treasury: {
+    address: string;
   };
   onchainIntentsEnabled: boolean;
   intentRetentionDays: number;
@@ -158,6 +162,24 @@ export interface AppConfig {
      * `contract_unconfigured` rather than as zero divergence.
      */
     sourceAccount: string;
+  governance: {
+    /**
+     * On-chain governance / parameters contract ID.
+     * When set, ProtocolParamsService reads current + scheduled parameters
+     * from this contract and exposes them via GET /api/v1/params.
+     * Leave blank to use code / env defaults only.
+     */
+    paramsContractId: string;
+    /**
+     * How often (in milliseconds) to poll the parameters contract for changes.
+     * Default: 30 000 ms (30 s).
+     */
+    paramsPollIntervalMs: number;
+  leaderElection: {
+    /** When false, all workers run unconditionally (pre-election behaviour). */
+    enabled: boolean;
+    /** Heartbeat interval in ms (default 5000). */
+    heartbeatMs: number;
   };
 }
 
@@ -170,11 +192,15 @@ export default (): AppConfig => ({
   stellar: {
     network: (process.env.STELLAR_NETWORK ?? "testnet") as AppConfig["stellar"]["network"],
     sorobanRpcUrl: process.env.SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org",
+    horizonUrl: process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org",
     settlementContractId: process.env.SETTLEMENT_CONTRACT_ID ?? "",
     solverRegistryContractId: process.env.SOLVER_REGISTRY_CONTRACT_ID ?? "",
     signerSecretKey: process.env.STELLAR_SIGNER_SECRET_KEY ?? "",
     signingKey: process.env.SOROBAN_SIGNING_KEY ?? "",
     feePercentile: (process.env.SOROBAN_FEE_PERCENTILE ?? "p50") as FeePercentile,
+  },
+  treasury: {
+    address: process.env.TREASURY_ADDRESS ?? "",
   },
   onchainIntentsEnabled: (process.env.ONCHAIN_INTENTS_ENABLED ?? "false") === "true",
   intentRetentionDays: parseInt(process.env.INTENT_RETENTION_DAYS ?? "30", 10),
@@ -197,6 +223,12 @@ export default (): AppConfig => ({
     queueMax: clampPositiveInt(process.env.SHADOW_QUEUE_MAX, 256),
     concurrency: clampPositiveInt(process.env.SHADOW_CONCURRENCY, 4),
     sourceAccount: process.env.SHADOW_SOURCE_ACCOUNT ?? "",
+  governance: {
+    paramsContractId: process.env.PARAMS_CONTRACT_ID ?? "",
+    paramsPollIntervalMs: parseInt(process.env.PARAMS_POLL_INTERVAL_MS ?? "30000", 10),
+  leaderElection: {
+    enabled: (process.env.LEADER_ELECTION_ENABLED ?? "false") === "true",
+    heartbeatMs: parseInt(process.env.LEADER_ELECTION_HEARTBEAT_MS ?? "5000", 10),
   },
 });
 

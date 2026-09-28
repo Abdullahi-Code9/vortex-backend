@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { ThrottlerModule, ThrottlerGuard } from "@nestjs/throttler";
+import { ScheduleModule } from "@nestjs/schedule";
 import { ConfigModule } from "./config/config.module";
 import { HealthModule } from "./health/health.module";
 import { TokensModule } from "./tokens/tokens.module";
@@ -11,6 +12,10 @@ import { StatsModule } from "./stats/stats.module";
 import { SorobanModule } from "./soroban/soroban.module";
 import { RoutingModule } from "./routing/routing.module";
 import { PrismaModule } from "./prisma/prisma.module";
+import { TreasuryModule } from "./treasury/treasury.module";
+import { GovernanceModule } from "./governance/governance.module";
+import { MetricsModule } from "./metrics/metrics.module";
+import { LeaderElectionModule } from "./common/leader-election";
 
 @Module({
   imports: [
@@ -22,6 +27,8 @@ import { PrismaModule } from "./prisma/prisma.module";
         limit: 100,
       },
     ]),
+    // Enable scheduled tasks (cron jobs)
+    ScheduleModule.forRoot(),
     ConfigModule,
     PrismaModule,
     // MetricsModule registers GET /metrics and the HTTP metrics interceptor.
@@ -31,6 +38,11 @@ import { PrismaModule } from "./prisma/prisma.module";
     // module: dropping it from here leaves Nest unable to resolve
     // MetricsService and the application fails to boot.
     MetricsModule,
+    MetricsModule,
+    // Leader election must be initialised before any worker module so that
+    // LeaderElectionService is available when workers call registerWorker()
+    // in their onModuleInit hooks.
+    LeaderElectionModule.forRoot(),
     HealthModule,
     TokensModule,
     IntentsModule,
@@ -38,6 +50,8 @@ import { PrismaModule } from "./prisma/prisma.module";
     StatsModule,
     SorobanModule,
     RoutingModule,
+    TreasuryModule,
+    GovernanceModule,
   ],
   controllers: [],
   providers: [

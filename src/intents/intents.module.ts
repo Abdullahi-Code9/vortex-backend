@@ -13,6 +13,7 @@ import { SorobanModule } from "../soroban/soroban.module";
 import { EventIngestionService } from "../soroban/event-ingestion.service";
 import { AppConfig } from "../config/configuration";
 import { PrismaService } from "../prisma/prisma.service";
+import { GovernanceModule } from "../governance/governance.module";
 
 @Module({
   // `forwardRef` on the SorobanModule import mirrors the one in SorobanModule:
@@ -23,6 +24,7 @@ import { PrismaService } from "../prisma/prisma.service";
     TokensModule,
     forwardRef(() => SorobanModule),
   ],
+  imports: [forwardRef(() => SolversModule), RoutingModule, TokensModule, SorobanModule, GovernanceModule],
   controllers: [IntentsController],
   providers: [
     // Select the persistence adapter based on INTENTS_PERSISTENCE env var.
