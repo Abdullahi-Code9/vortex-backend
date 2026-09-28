@@ -14,6 +14,20 @@ import { StellarTxService } from "../soroban/stellar-tx.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AppConfig } from "../config/configuration";
 import { ProtocolParamsService } from "../governance/params.service";
+import { LeaderElectionService } from "../common/leader-election";
+
+/** Minimal no-op LeaderElectionService for tests that don't exercise election. */
+function noopLeaderElection(): LeaderElectionService {
+  return {
+    registerWorker: jest.fn(),
+    isLeader: jest.fn().mockReturnValue(true),
+    getState: jest.fn().mockReturnValue(null),
+    getAllStates: jest.fn().mockReturnValue({}),
+    onModuleInit: jest.fn(),
+    onModuleDestroy: jest.fn(),
+    runHeartbeatOnce: jest.fn().mockResolvedValue(undefined),
+  } as unknown as LeaderElectionService;
+}
 
 /** Use a stable test address (does not need to be a real funded key). */
 const ALPHA_KEYPAIR = Keypair.random();
@@ -76,6 +90,7 @@ describe("IntentsSweeperService", () => {
       solversService,
       solverRegistryService,
       metricsService as unknown as MetricsService,
+      noopLeaderElection(),
     );
   });
 

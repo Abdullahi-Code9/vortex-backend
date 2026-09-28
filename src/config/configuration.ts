@@ -126,6 +126,11 @@ export interface AppConfig {
      * Default: 30 000 ms (30 s).
      */
     paramsPollIntervalMs: number;
+  leaderElection: {
+    /** When false, all workers run unconditionally (pre-election behaviour). */
+    enabled: boolean;
+    /** Heartbeat interval in ms (default 5000). */
+    heartbeatMs: number;
   };
 }
 
@@ -159,5 +164,8 @@ export default (): AppConfig => ({
   governance: {
     paramsContractId: process.env.PARAMS_CONTRACT_ID ?? "",
     paramsPollIntervalMs: parseInt(process.env.PARAMS_POLL_INTERVAL_MS ?? "30000", 10),
+  leaderElection: {
+    enabled: (process.env.LEADER_ELECTION_ENABLED ?? "false") === "true",
+    heartbeatMs: parseInt(process.env.LEADER_ELECTION_HEARTBEAT_MS ?? "5000", 10),
   },
 });

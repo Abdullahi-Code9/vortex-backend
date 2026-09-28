@@ -144,4 +144,22 @@ export const envValidationSchema = Joi.object({
   // How often (ms) to poll the parameters contract.  30 s is the default;
   // lower values increase RPC load; raise in production if rate-limited.
   PARAMS_POLL_INTERVAL_MS: Joi.number().integer().min(5_000).default(30_000),
+  // ── Leader election (issue #493) ──────────────────────────────────────────
+  // Controls whether Postgres advisory-lock based leader election is enabled
+  // for singleton workers (sweeper, event-ingestion).
+  //
+  // Set LEADER_ELECTION_ENABLED=false in single-instance dev deployments or
+  // when no database is available. When disabled, every worker considers
+  // itself leader unconditionally — the pre-election behaviour.
+  //
+  // IMPORTANT: Do NOT route the leader election connection through PgBouncer
+  // in transaction-pooling mode. Advisory locks are session-scoped; they are
+  // released when the connection is returned to the pool. Use a direct
+  // connection or PgBouncer in session mode.
+  LEADER_ELECTION_ENABLED: Joi.boolean().default(false),
+
+  // Heartbeat interval in milliseconds — how often non-leaders attempt to
+  // acquire the lock and leaders renew it. Lower values reduce failover time
+  // but increase DB load. Default 5 s gives ≤ 15 s failover.
+  LEADER_ELECTION_HEARTBEAT_MS: Joi.number().integer().min(1000).max(60000).default(5000),
 });

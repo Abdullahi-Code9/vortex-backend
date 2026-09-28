@@ -21,6 +21,14 @@
     "db:studio": "prisma studio",
     "db:validate": "prisma validate",
     "generate:client": "npm run build && tsx scripts/generate-client.ts",
+    "perf": "k6 run test/perf/k6/all-scenarios.js -e K6_BASE_URL=http://localhost:4000",
+    "perf:create-intent": "k6 run test/perf/k6/scenarios/create-intent-burst.js -e K6_BASE_URL=http://localhost:4000",
+    "perf:solver-polling": "k6 run test/perf/k6/scenarios/solver-polling.js -e K6_BASE_URL=http://localhost:4000",
+    "perf:quote-requests": "k6 run test/perf/k6/scenarios/quote-requests.js -e K6_BASE_URL=http://localhost:4000",
+    "perf:mixed-lifecycle": "k6 run test/perf/k6/scenarios/mixed-lifecycle.js -e K6_BASE_URL=http://localhost:4000",
+    "perf:compare": "node test/perf/k6/scripts/compare-results.mjs --results test/perf/k6/results/all-scenarios-latest.json --baseline test/perf/k6/baselines/all-scenarios.json",
+    "perf:update-baselines": "node test/perf/k6/scripts/update-baselines.mjs",
+    "perf:gen-fixtures": "node test/perf/k6/scripts/generate-fixtures.mjs",
     "prepare": "husky"
   },
   "dependencies": {
@@ -45,6 +53,7 @@
     "dotenv": "^16.4.5",
     "helmet": "^7.1.0",
     "joi": "^18.2.3",
+    "pg": "8.13.3",
     "prom-client": "^15.1.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
