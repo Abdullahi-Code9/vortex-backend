@@ -56,15 +56,39 @@ Definitions: `ops/slo/slos.yaml` (OpenSLO). Generated rules:
 |---|---|---|
 | Relay availability | 99.9% non-5xx / 30d | `VortexHighBurnRate` (page, 1h/5m) / `VortexSlowBurnRate` (ticket, 6h/30m) |
 | Intent-create latency | p95 < 500ms / 7d | `VortexCreateLatencyHigh` (ticket) |
-| WS delivery latency | p95 < 1s / 7d | covered by availability burn + `vortex:ws:p95_5m` recording rule |
+| WS delivery latency | p95 < 1s / 7d | `VortexWsDeliveryLatencyHigh` (ticket, p99 > 2s) |
 | Event-ingestion lag | < 30s 99% / 7d | `VortexIngestionLagHigh` (page) |
 | Tx confirmation latency | p95 < 60s / 7d | `vortex:confirm:p95_5m` recording rule, ticket on sustained breach |
+| Intent lifecycle | ≥ 95% of opened intents reach a terminal state | `VortexIntentsNotTerminating` (ticket) |
+| Intent settlement | ≥ 90% of accepted intents fill | `VortexSolverFillRateLow` (ticket) |
+| On-chain cutover parity | 0 outcome mismatches | `VortexShadowDivergenceDetected` (page), see `onchain-cutover.md` |
 
 SLIs: `vortex_http_requests_total`, `vortex_intent_create_duration_seconds`,
 `vortex_ws_delivery_duration_seconds`, `vortex_event_ingestion_lag_seconds`,
 `vortex_tx_confirmation_duration_seconds` (see `src/metrics/metrics.service.ts`).
 Fast-burn alerts require a minimum throughput (`>100 events/h`) so low-traffic
 periods do not page.
+
+### Dashboards for each alert (issue #481)
+
+Every alert above carries both a `runbook_url` and a `dashboard_url`
+annotation, so the notification links straight to the graph that shows the
+problem. The committed dashboards live in `ops/grafana/dashboards` and are
+provisioned by the `observability` Compose profile
+(`docker compose --profile observability up -d`, Grafana on
+<http://localhost:3001>).
+
+| Alert | Dashboard |
+|---|---|
+| `VortexHighBurnRate`, `VortexSlowBurnRate`, `VortexCreateLatencyHigh` | `vortex-api-red.json` |
+| `VortexIngestionLagHigh`, `VortexShadowDivergenceDetected`, `VortexShadowMonitorStarved`, `VortexShadowMonitorUnconfigured` | `vortex-onchain-pipeline.json` |
+| `VortexIntentsNotTerminating` | `vortex-intent-funnel.json` |
+| `VortexSolverFillRateLow` | `vortex-solver-network.json` |
+| `VortexWsDeliveryLatencyHigh` | `vortex-ws-feed.json` |
+
+Run the local stack with `node ops/grafana/build.mjs` if the committed JSON is
+stale; the dashboards are generated, not hand-edited. See
+`ops/grafana/README.md`.
 
 ---
 

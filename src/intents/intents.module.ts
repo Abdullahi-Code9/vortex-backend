@@ -15,7 +15,14 @@ import { AppConfig } from "../config/configuration";
 import { PrismaService } from "../prisma/prisma.service";
 
 @Module({
-  imports: [forwardRef(() => SolversModule), RoutingModule, TokensModule, SorobanModule],
+  // `forwardRef` on the SorobanModule import mirrors the one in SorobanModule:
+  // the two modules need each other (ShadowService here, IntentsService there).
+  imports: [
+    forwardRef(() => SolversModule),
+    RoutingModule,
+    TokensModule,
+    forwardRef(() => SorobanModule),
+  ],
   controllers: [IntentsController],
   providers: [
     // Select the persistence adapter based on INTENTS_PERSISTENCE env var.

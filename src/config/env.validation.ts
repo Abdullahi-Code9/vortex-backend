@@ -71,6 +71,20 @@ export const envValidationSchema = Joi.object({
   INTENTS_PERSISTENCE: Joi.string().valid("memory", "prisma").default("memory"),
   SOLVERS_PERSISTENCE: Joi.string().valid("memory", "prisma").default("memory"),
 
+  // ── Intent retention (in-memory store hygiene) ─────────────────────────────
+  // How long terminal intents are kept in the in-memory adapter, and how often
+  // the eviction sweep runs.  Both are read by IntentsService.
+  INTENT_RETENTION_DAYS: Joi.number().integer().min(0).default(30),
+  INTENT_RETENTION_SWEEP_MS: Joi.number().integer().min(0).default(60000),
+
+  // ── Reference solver bot (scripts/solver-bot.ts) ───────────────────────────
+  // Read by the standalone bot process rather than by the server, but declared
+  // here so `npm run check:env-drift` sees one consistent variable set across
+  // env.validation.ts, configuration.ts and the .env*.example files.
+  SOLVER_SECRET: Joi.string().allow("").default(""),
+  SOLVER_ADDRESS: Joi.string().allow("").default(""),
+  SOLVER_CHAINS: Joi.string().allow("").default(""),
+
   // ── Observability ─────────────────────────────────────────────────────────
   // Sentry DSN for error alerting.  Omit (or leave blank) to disable Sentry.
   SENTRY_DSN: Joi.string().uri().allow("").default(""),
@@ -133,4 +147,34 @@ export const envValidationSchema = Joi.object({
       }),
       otherwise: Joi.boolean().default(true),
     }),
+
+  // ── Shadow-mode divergence monitor (issue #401) ───────────────────────────
+  // Runs read-only on-chain simulations of every intent state transition in
+  // parallel with the authoritative off-chain path and reports where the two
+  // disagree.  Never submits a transaction; see src/soroban/shadow.service.ts.
+  //
+  // Off by default: a sampled simulation is a real RPC call with a real
+  // rate-limit footprint, so it is an explicit per-environment opt-in.
+  SHADOW_MODE_ENABLED: Joi.boolean().default(false),
+
+  // Fraction of transitions to simulate, as a probability in [0, 1].
+  // 1 (the default) compares every transition; 0 disables sampling entirely
+  // while leaving the monitor "enabled" — useful for a canary that only wants
+  // the queue/metric plumbing live.
+  SHADOW_SAMPLE_RATE: Joi.number().min(0).max(1).default(1),
+
+  // Hard cap on queued observations.  Beyond this, observations are dropped and
+  // counted (`vortex_shadow_dropped_total`) rather than queued, so a slow or
+  // unreachable RPC degrades the monitor instead of the service.
+  SHADOW_QUEUE_MAX: Joi.number().integer().min(1).default(256),
+
+  // How many queued observations the background drain simulates concurrently.
+  SHADOW_CONCURRENCY: Joi.number().integer().min(1).max(32).default(4),
+
+  // Public key used as the transaction source for shadow simulations.  A Stellar
+  // public key (strkey G...).  It is never signed, never submitted and never
+  // charged a fee — it only has to be a valid address for the envelope.
+  // Optional: when empty the monitor reports `contract_unconfigured` rather
+  // than silently recording zero divergence.
+  SHADOW_SOURCE_ACCOUNT: Joi.string().allow("").default(""),
 });

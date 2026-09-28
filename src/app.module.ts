@@ -5,6 +5,7 @@ import { ConfigModule } from "./config/config.module";
 import { HealthModule } from "./health/health.module";
 import { TokensModule } from "./tokens/tokens.module";
 import { IntentsModule } from "./intents/intents.module";
+import { MetricsModule } from "./metrics/metrics.module";
 import { SolversModule } from "./solvers/solvers.module";
 import { StatsModule } from "./stats/stats.module";
 import { SorobanModule } from "./soroban/soroban.module";
@@ -23,6 +24,13 @@ import { PrismaModule } from "./prisma/prisma.module";
     ]),
     ConfigModule,
     PrismaModule,
+    // MetricsModule registers GET /metrics and the HTTP metrics interceptor.
+    // It is @Global(), so registering it here makes MetricsService injectable
+    // everywhere — which IntentsSweeperService, ShadowService and the SLO
+    // emitters all rely on. It must be listed exactly once, in the root
+    // module: dropping it from here leaves Nest unable to resolve
+    // MetricsService and the application fails to boot.
+    MetricsModule,
     HealthModule,
     TokensModule,
     IntentsModule,
