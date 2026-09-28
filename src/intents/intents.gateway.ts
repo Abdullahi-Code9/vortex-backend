@@ -8,6 +8,10 @@ import { logger } from "../common/logger";
 import { SUPPORTED_CHAINS, SupportedChain } from "./intents.types";
 import { verifyStellarSignature, buildWsAuthMessage } from "../common/stellar-signature";
 import { buildMatchPredicate, IntentCapabilityIndex, SolverMatchPredicate } from "./solver-intent-matcher";
+import {
+  WS_MAX_FILTER_CHAINS,
+  WS_MAX_SUBSCRIPTIONS_PER_CONNECTION,
+} from "../config/limits.config";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
@@ -47,6 +51,8 @@ interface SubscriberFilter {
   solver: SolverMatchPredicate | null;
   /** Opt-out flag: receives all events even after authentication. */
   wantAll: boolean;
+  /** Number of `subscribe` messages this connection has sent. */
+  subscriptionCount: number;
 }
 
 /**
@@ -305,7 +311,9 @@ export class IntentsGateway
 
   handleConnection(client: WebSocket) {
     this.subscribers.set(client, { chains: null, solver: null, wantAll: false });
+    this.subscribers.set(client, { chains: null, subscriptionCount: 0 });
     this.alive.set(client, true);
+    this.metricsService?.incWsConnection();
 
     client.on("message", (raw) => {
       void this.handleMessage(client, raw);
@@ -316,7 +324,7 @@ export class IntentsGateway
     });
 
     client.on("error", () => {
-      this.subscribers.delete(client);
+      this.removeSubscriber(client);
       logger.debug(
         `ws client error/drop — active subscribers: ${this.subscribers.size}`,
       );
@@ -346,9 +354,30 @@ export class IntentsGateway
   }
 
   handleDisconnect(client: WebSocket) {
-    this.subscribers.delete(client);
-    this.authenticatedSolver.delete(client);
+    this.removeSubscriber(client);
     logger.info(`ws client disconnected (subscribers=${this.subscribers.size})`);
+  }
+
+  /**
+   * Drop a client from the subscriber set and keep the connection gauge honest.
+   *
+   * Every path that removes a client goes through here — explicit disconnect,
+   * a transport-level `error`, and the heartbeat terminator — because they are
+   * mutually exclusive in practice but not in the platform: a socket that
+   * errors frequently never reaches `handleDisconnect`, and one that dies
+   * silently is only reaped by the heartbeat. Removing a client from two
+   * places with a bare `subscribers.delete` would leak
+   * `vortex_ws_connections_active` upwards until the process restarts, and a
+   * gauge that only ever climbs turns the WS panels into decoration.
+   *
+   * The gauge is decremented only when this call actually removed something, so
+   * a duplicate disconnect cannot drive it negative.
+   */
+  private removeSubscriber(client: WebSocket): void {
+    const removed = this.subscribers.delete(client);
+    this.authenticatedSolver.delete(client);
+    this.alive.delete(client);
+    if (removed) this.metricsService?.decWsConnection();
   }
 
   /**
@@ -399,6 +428,17 @@ export class IntentsGateway
    *
    * When `chains` is present, a per-connection chain filter is installed (this
    * clears any existing solver capability predicate on the connection).
+   * Validates each chain value against `SUPPORTED_CHAINS` and stores only
+   * the valid subset. A subscribe message with no valid chains is treated as
+   * "subscribe to nothing" (the client will receive only chainless events).
+   * An entirely missing or non-array `chains` field is rejected silently
+   * without updating the existing filter.
+   *
+   * Issue #476: enforces two per-connection limits:
+   * 1. The `chains` array may contain at most `WS_MAX_FILTER_CHAINS` values.
+   * 2. A connection may send at most `WS_MAX_SUBSCRIPTIONS_PER_CONNECTION`
+   *    subscribe messages in its lifetime.  Excess subscribe attempts are
+   *    rejected with a `subscribe_rejected` error frame.
    */
   private handleSubscribe(client: WebSocket, msg: Record<string, unknown>): void {
     // all=true: opt out of capability filtering.
@@ -417,12 +457,58 @@ export class IntentsGateway
       return;
     }
 
-    const validChains = (msg.chains as unknown[]).filter(
+    const filter = this.subscribers.get(client);
+    if (!filter) return;
+
+    // ── Limit 1: max subscriptions per connection (issue #476) ───────────────
+    const maxSubs = parseInt(
+      process.env.WS_MAX_SUBSCRIPTIONS ?? String(WS_MAX_SUBSCRIPTIONS_PER_CONNECTION),
+      10,
+    );
+    if (filter.subscriptionCount >= maxSubs) {
+      logger.warn(
+        `ws subscribe_rejected: connection has reached the max subscription limit (${maxSubs})`,
+      );
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(
+          JSON.stringify({
+            type: "subscribe_rejected",
+            reason: `Maximum subscription limit of ${maxSubs} reached for this connection`,
+          }),
+        );
+      }
+      return;
+    }
+
+    // ── Limit 2: max chain-filter values per subscribe message (issue #476) ──
+    const maxChains = parseInt(
+      process.env.WS_MAX_FILTER_CHAINS ?? String(WS_MAX_FILTER_CHAINS),
+      10,
+    );
+    const rawChains = msg.chains as unknown[];
+    if (rawChains.length > maxChains) {
+      logger.warn(
+        `ws subscribe_rejected: chains array length ${rawChains.length} exceeds max ${maxChains}`,
+      );
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(
+          JSON.stringify({
+            type: "subscribe_rejected",
+            reason: `chains array may contain at most ${maxChains} values`,
+          }),
+        );
+      }
+      return;
+    }
+
+    const validChains = rawChains.filter(
       (c): c is SupportedChain =>
         typeof c === "string" && (SUPPORTED_CHAINS as readonly string[]).includes(c),
     );
 
     this.subscribers.set(client, { chains: new Set(validChains), solver: null, wantAll: false });
+    filter.chains = new Set(validChains);
+    filter.subscriptionCount += 1;
 
     logger.debug(`ws client subscribed to chains: ${validChains.join(", ") || "(none)"}`);
 
@@ -705,7 +791,7 @@ export class IntentsGateway
     for (const [client] of this.subscribers) {
       if (this.alive.get(client) === false) {
         client.terminate();
-        this.subscribers.delete(client);
+        this.removeSubscriber(client);
         logger.debug(
           `ws heartbeat terminated dead client (subscribers=${this.subscribers.size})`,
         );
@@ -723,7 +809,7 @@ export class IntentsGateway
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     for (const [client] of this.subscribers) {
       client.close(1001, "Server shutting down");
+      this.removeSubscriber(client);
     }
-    this.subscribers.clear();
   }
 }

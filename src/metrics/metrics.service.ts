@@ -20,6 +20,27 @@ export class MetricsService implements OnModuleInit {
   public readonly eventIngestionLag: client.Gauge<string>;
 
   /**
+   * Shadow-mode divergence monitor (issue #401).
+   *
+   * `vortex_shadow_comparisons_total{transition,outcome}` counts every
+   * (expected, simulated) pair the monitor resolved, and
+   * `vortex_shadow_divergences_total{transition,reason}` counts the subset the
+   * classifier flagged. `vortex_shadow_dropped_total` and
+   * `vortex_shadow_queue_depth` expose monitor health so a starved monitor is
+   * never mistaken for a healthy one — the on-chain cutover runbook's go/no-go
+   * threshold is only meaningful while these are being exercised.
+   */
+  public readonly shadowComparisons: client.Counter<string>;
+  public readonly shadowDivergences: client.Counter<string>;
+  public readonly shadowDropped: client.Counter<string>;
+  public readonly shadowQueueDepth: client.Gauge<string>;
+   * Leader election metrics (issue #493).
+   * Track which replica is leader per worker and how often leadership changes.
+   */
+  public readonly leaderElectionIsLeader: client.Gauge<string>;
+  public readonly leaderElectionChangesTotal: client.Counter<string>;
+
+  /**
    * Sweeper metrics — these replace the retired src/common/metrics.ts
    * MetricsRegistry.sweeper namespace (see issue #259).
    *
@@ -180,6 +201,42 @@ export class MetricsService implements OnModuleInit {
       name: `${prefix}solver_registry_events_total`,
       help: "Solver-registry contract events ingested by type",
       labelNames: ["event_type"],
+    // ── Shadow-mode divergence monitor (issue #401) ──────────────────────────
+    this.shadowComparisons = new client.Counter({
+      name: `${prefix}shadow_comparisons_total`,
+      help: "Shadow-mode (expected, simulated) outcome pairs resolved, by transition, expected outcome and simulated outcome",
+      labelNames: ["transition", "expected", "outcome"],
+      registers: [this.register],
+    });
+
+    this.shadowDivergences = new client.Counter({
+      name: `${prefix}shadow_divergences_total`,
+      help: "Shadow-mode divergences between the off-chain and simulated on-chain outcome, by transition and reason",
+      labelNames: ["transition", "reason"],
+      registers: [this.register],
+    });
+
+    this.shadowDropped = new client.Counter({
+      name: `${prefix}shadow_dropped_total`,
+      help: "Shadow-mode observations dropped because the bounded queue was full",
+      registers: [this.register],
+    });
+
+    this.shadowQueueDepth = new client.Gauge({
+      name: `${prefix}shadow_queue_depth`,
+      help: "Current number of queued shadow-mode observations awaiting simulation",
+    // ── Leader election metrics (issue #493) ─────────────────────────────────
+    this.leaderElectionIsLeader = new client.Gauge({
+      name: `${prefix}leader_election_is_leader`,
+      help: "1 when this replica is the current leader for the named worker, 0 otherwise",
+      labelNames: ["worker"],
+      registers: [this.register],
+    });
+
+    this.leaderElectionChangesTotal = new client.Counter({
+      name: `${prefix}leader_election_changes_total`,
+      help: "Total number of leadership transitions (acquisitions + losses) per worker",
+      labelNames: ["worker", "transition"],
       registers: [this.register],
     });
   }
@@ -276,5 +333,51 @@ export class MetricsService implements OnModuleInit {
 
   incSolverRegistryEvent(eventType: string): void {
     this.solverRegistryEventsTotal.inc({ event_type: eventType });
+  /**
+   * Record one resolved shadow-mode comparison (issue #401).
+   *
+   * `expected` is the off-chain verdict and `outcome` the simulated one, so
+   * the pair required by the issue stays queryable from PromQL:
+   * `...{expected="ok",outcome="rejected"}` is the "contract would have
+   * refused a transition we committed" case, and the reverse label pair is the
+   * "we refused something the contract allows" case. Cardinality is bounded at
+   * 5 transitions x 2 expected x 4 outcomes.
+   *
+   * `outcome` is `"unavailable"` when the simulation never produced a verdict
+   * (unconfigured contract, RPC unreachable) so that case stays
+   * distinguishable in PromQL from a contract that actively said no.
+   */
+  recordShadowComparison(transition: string, expected: string, outcome: string): void {
+    this.shadowComparisons.inc({ transition, expected, outcome });
+  }
+
+  /** Record one classified shadow-mode divergence (issue #401). */
+  recordShadowDivergence(transition: string, reason: string): void {
+    this.shadowDivergences.inc({ transition, reason });
+  }
+
+  /** Record one shadow-mode observation dropped by the bounded queue. */
+  recordShadowDrop(): void {
+    this.shadowDropped.inc();
+  }
+
+  /** Publish the current shadow queue depth. */
+  setShadowQueueDepth(depth: number): void {
+    this.shadowQueueDepth.set(depth);
+   * Record that this replica acquired leadership for `workerName`.
+   * Sets the is_leader gauge to 1 and increments the acquisition counter.
+   */
+  recordLeadershipAcquired(workerName: string): void {
+    this.leaderElectionIsLeader.set({ worker: workerName }, 1);
+    this.leaderElectionChangesTotal.inc({ worker: workerName, transition: "acquired" });
+  }
+
+  /**
+   * Record that this replica lost leadership for `workerName`.
+   * Sets the is_leader gauge to 0 and increments the lost counter.
+   */
+  recordLeadershipLost(workerName: string): void {
+    this.leaderElectionIsLeader.set({ worker: workerName }, 0);
+    this.leaderElectionChangesTotal.inc({ worker: workerName, transition: "lost" });
   }
 }
