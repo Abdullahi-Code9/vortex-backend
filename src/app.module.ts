@@ -10,6 +10,8 @@ import { StatsModule } from "./stats/stats.module";
 import { SorobanModule } from "./soroban/soroban.module";
 import { RoutingModule } from "./routing/routing.module";
 import { PrismaModule } from "./prisma/prisma.module";
+import { MetricsModule } from "./metrics/metrics.module";
+import { LeaderElectionModule } from "./common/leader-election";
 
 @Module({
   imports: [
@@ -23,6 +25,11 @@ import { PrismaModule } from "./prisma/prisma.module";
     ]),
     ConfigModule,
     PrismaModule,
+    MetricsModule,
+    // Leader election must be initialised before any worker module so that
+    // LeaderElectionService is available when workers call registerWorker()
+    // in their onModuleInit hooks.
+    LeaderElectionModule.forRoot(),
     HealthModule,
     TokensModule,
     IntentsModule,
