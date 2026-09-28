@@ -81,6 +81,7 @@ export interface AppConfig {
   stellar: {
     network: "testnet" | "futurenet" | "mainnet";
     sorobanRpcUrl: string;
+    horizonUrl: string;
     settlementContractId: string;
     solverRegistryContractId: string;
     signerSecretKey: string;
@@ -91,6 +92,9 @@ export interface AppConfig {
     signingKey: string;
     /** Fee percentile to use when estimating Soroban inclusion fees. */
     feePercentile: FeePercentile;
+  };
+  treasury: {
+    address: string;
   };
   onchainIntentsEnabled: boolean;
   intentRetentionDays: number;
@@ -143,11 +147,15 @@ export default (): AppConfig => ({
   stellar: {
     network: (process.env.STELLAR_NETWORK ?? "testnet") as AppConfig["stellar"]["network"],
     sorobanRpcUrl: process.env.SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org",
+    horizonUrl: process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org",
     settlementContractId: process.env.SETTLEMENT_CONTRACT_ID ?? "",
     solverRegistryContractId: process.env.SOLVER_REGISTRY_CONTRACT_ID ?? "",
     signerSecretKey: process.env.STELLAR_SIGNER_SECRET_KEY ?? "",
     signingKey: process.env.SOROBAN_SIGNING_KEY ?? "",
     feePercentile: (process.env.SOROBAN_FEE_PERCENTILE ?? "p50") as FeePercentile,
+  },
+  treasury: {
+    address: process.env.TREASURY_ADDRESS ?? "",
   },
   onchainIntentsEnabled: (process.env.ONCHAIN_INTENTS_ENABLED ?? "false") === "true",
   intentRetentionDays: parseInt(process.env.INTENT_RETENTION_DAYS ?? "30", 10),

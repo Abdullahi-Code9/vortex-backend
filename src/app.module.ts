@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { ThrottlerModule, ThrottlerGuard } from "@nestjs/throttler";
+import { ScheduleModule } from "@nestjs/schedule";
 import { ConfigModule } from "./config/config.module";
 import { HealthModule } from "./health/health.module";
 import { TokensModule } from "./tokens/tokens.module";
@@ -10,6 +11,7 @@ import { StatsModule } from "./stats/stats.module";
 import { SorobanModule } from "./soroban/soroban.module";
 import { RoutingModule } from "./routing/routing.module";
 import { PrismaModule } from "./prisma/prisma.module";
+import { TreasuryModule } from "./treasury/treasury.module";
 import { GovernanceModule } from "./governance/governance.module";
 import { MetricsModule } from "./metrics/metrics.module";
 import { LeaderElectionModule } from "./common/leader-election";
@@ -24,6 +26,8 @@ import { LeaderElectionModule } from "./common/leader-election";
         limit: 100,
       },
     ]),
+    // Enable scheduled tasks (cron jobs)
+    ScheduleModule.forRoot(),
     ConfigModule,
     PrismaModule,
     MetricsModule,
@@ -38,6 +42,7 @@ import { LeaderElectionModule } from "./common/leader-election";
     StatsModule,
     SorobanModule,
     RoutingModule,
+    TreasuryModule,
     GovernanceModule,
   ],
   controllers: [],
