@@ -133,4 +133,15 @@ export const envValidationSchema = Joi.object({
       }),
       otherwise: Joi.boolean().default(true),
     }),
+
+  // ── Governance parameters contract ────────────────────────────────────────
+  // When set, ProtocolParamsService reads current + scheduled protocol
+  // parameters (fee bps, fill windows, deadlines, exposure ratio, slash
+  // amount) from this Soroban contract address.  Leave blank to use code
+  // and env defaults.
+  PARAMS_CONTRACT_ID: Joi.string().allow("").default(""),
+
+  // How often (ms) to poll the parameters contract.  30 s is the default;
+  // lower values increase RPC load; raise in production if rate-limited.
+  PARAMS_POLL_INTERVAL_MS: Joi.number().integer().min(5_000).default(30_000),
 });

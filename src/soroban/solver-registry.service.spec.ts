@@ -30,6 +30,10 @@ function makeConfigService(
     wsMaxConnections: 1000,
     wsBackplane: "memory",
     redisUrl: "redis://localhost:6379",
+    governance: {
+      paramsContractId: "",
+      paramsPollIntervalMs: 30_000,
+    },
   };
   return {
     get: (key: string) => {

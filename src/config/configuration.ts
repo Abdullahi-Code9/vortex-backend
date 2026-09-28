@@ -113,6 +113,20 @@ export interface AppConfig {
   wsMaxConnections: number;
   wsBackplane: "memory" | "redis";
   redisUrl: string;
+  governance: {
+    /**
+     * On-chain governance / parameters contract ID.
+     * When set, ProtocolParamsService reads current + scheduled parameters
+     * from this contract and exposes them via GET /api/v1/params.
+     * Leave blank to use code / env defaults only.
+     */
+    paramsContractId: string;
+    /**
+     * How often (in milliseconds) to poll the parameters contract for changes.
+     * Default: 30 000 ms (30 s).
+     */
+    paramsPollIntervalMs: number;
+  };
 }
 
 export default (): AppConfig => ({
@@ -142,4 +156,8 @@ export default (): AppConfig => ({
   wsMaxConnections: parseInt(process.env.WS_MAX_CONNECTIONS ?? "1000", 10),
   wsBackplane: (process.env.WS_BACKPLANE ?? "memory") as "memory" | "redis",
   redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
+  governance: {
+    paramsContractId: process.env.PARAMS_CONTRACT_ID ?? "",
+    paramsPollIntervalMs: parseInt(process.env.PARAMS_POLL_INTERVAL_MS ?? "30000", 10),
+  },
 });
