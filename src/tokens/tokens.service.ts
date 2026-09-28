@@ -1,5 +1,5 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
-import { SUPPORTED_TOKENS, STELLAR_TOKENS, SourceToken, StellarToken } from "./tokens.data";
+import { BadRequestException, Inject, Injectable } from "@nestjs/common";
+import { SUPPORTED_TOKENS, StellarToken } from "./tokens.data";
 import { SupportedChain } from "../intents/intents.types";
 import { ITokensRepository, TOKENS_REPOSITORY, TokenRecord } from "./tokens.repository";
 
@@ -30,6 +30,21 @@ export interface ResolvedDstToken {
 }
 
 export type ResolvedToken = ResolvedSrcToken | ResolvedDstToken;
+
+export interface ApiToken {
+  address: string;
+  contract: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  priceUSD: number;
+}
+
+export interface TokensByChainResponse {
+  tokens: ApiToken[] | Record<string, ApiToken[]>;
+  chain?: string;
+  stellarTokens?: ApiToken[];
+}
 
 @Injectable()
 export class TokensService {
@@ -115,13 +130,32 @@ export class TokensService {
     return token;
   }
 
-  getByChain(chain?: string) {
+  private toApiToken(record: TokenRecord): ApiToken {
+    return {
+      address: record.address,
+      contract: record.address,
+      symbol: record.symbol,
+      name: record.name,
+      decimals: record.decimals,
+      priceUSD: record.priceUsd ?? 0,
+    };
+  }
+
+  getByChain(chain?: string): TokensByChainResponse {
+    const chainRecords =
+      chain !== undefined && (chain === "stellar" || chain in SUPPORTED_TOKENS)
+        ? this.repo.findByChain(chain)
+        : this.repo.findAll();
+    const stellarTokens = chainRecords.filter((record) => record.chain === "stellar");
+
     if (chain === "stellar") {
-      return { tokens: stellarTokens.map((t) => ({ ...t, contract: t.address })), chain: "stellar" };
+      return { tokens: stellarTokens.map((record) => this.toApiToken(record)), chain: "stellar" };
     }
-    if (chain && chain in SUPPORTED_TOKENS) {
+    if (chain !== undefined && chain in SUPPORTED_TOKENS) {
       return {
-        tokens: chainRecords.filter((t) => t.chain === chain).map((t) => ({ ...t, contract: t.address })),
+        tokens: chainRecords
+          .filter((record) => record.chain === chain)
+          .map((record) => this.toApiToken(record)),
         chain,
       };
     }
@@ -129,15 +163,25 @@ export class TokensService {
       tokens: Object.fromEntries(
         Object.entries(SUPPORTED_TOKENS).map(([key, _]) => [
           key,
-          chainRecords.filter((t) => t.chain === key).map((t) => ({ ...t, contract: t.address })),
+          chainRecords
+            .filter((record) => record.chain === key)
+            .map((record) => this.toApiToken(record)),
         ]),
       ),
-      stellarTokens: stellarTokens.map((t) => ({ ...t, contract: t.address })),
+      stellarTokens: stellarTokens.map((record) => this.toApiToken(record)),
     };
   }
 
-  async getStellarTokens(): Promise<{ tokens: StellarToken[] }> {
-    const tokens = await this.repo.findByChain("stellar");
-    return { tokens: tokens.map((t) => ({ contract: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, priceUSD: t.priceUsd ?? 0 })) };
+  getStellarTokens(): { tokens: StellarToken[] } {
+    const records = this.repo.findByChain("stellar");
+    return {
+      tokens: records.map((record) => ({
+        contract: record.address,
+        symbol: record.symbol,
+        name: record.name,
+        decimals: record.decimals,
+        priceUSD: record.priceUsd ?? 0,
+      })),
+    };
   }
 }

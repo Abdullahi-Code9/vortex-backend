@@ -1,4 +1,5 @@
 import { BadRequestException } from "@nestjs/common";
+import { InMemoryTokensRepository } from "./in-memory-tokens.repository";
 import { TokensService } from "./tokens.service";
 import { SUPPORTED_TOKENS, STELLAR_TOKENS } from "./tokens.data";
 
@@ -6,7 +7,7 @@ describe("TokensService", () => {
   let service: TokensService;
 
   beforeEach(() => {
-    service = new TokensService();
+    service = new TokensService(new InMemoryTokensRepository());
   });
 
   it("getByChain with no chain returns the full registry plus Stellar tokens", () => {

@@ -10,11 +10,21 @@ import {
   Post,
   Query,
 } from "@nestjs/common";
-import { ApiOperation, ApiQuery, ApiTags } from "@nestjs/swagger";
+import {
+  ApiBadRequestResponse,
+  ApiNotFoundResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+  ApiUnauthorizedResponse,
+} from "@nestjs/swagger";
 import { IntentsService } from "../intents/intents.service";
-import { buildDisputeMessage, verifyStellarSignature, buildSolverStatusMessage } from "../common/stellar-signature";
-import { SolversService, LeaderboardWindow } from "./solvers.service";
+import { buildDisputeMessage, buildRegisterMessage, buildUpdateSolverMessage, verifyStellarSignature, buildSolverStatusMessage } from "../common/stellar-signature";
+import { SolversService, LeaderboardWindow, solverSupports } from "./solvers.service";
+import { ListIntentsDto } from "../intents/dto/list-intents.dto";
 import { RegisterSolverDto } from "./dto/register-solver.dto";
+import { UpdateSolverDto } from "./dto/update-solver.dto";
 import { UpdateSolverStatusDto } from "./dto/update-solver-status.dto";
 
 const WINDOW_SECONDS: Record<Exclude<LeaderboardWindow, "all">, number> = {
@@ -144,6 +154,29 @@ export class SolversController {
   @Get(":address")
   async getSolver(@Param("address") address: string) {
     const solver = await this.solversService.get(address);
+    if (!solver) throw new NotFoundException("Solver not found");
+    return solver;
+  }
+
+  /**
+   * PATCH /api/v1/solvers/:address
+   *
+   * Issue #273 — lets a solver operator edit their mutable profile fields
+   * (`name`, `supportedChains`, `supportedTokens`, `avgFillTime`). Signature
+   * verified per the repo's `verifyStellarSignature` convention: the operator
+   * proves control of `:address` before any write. Immutable fields are
+   * stripped by the DTO whitelist.
+   */
+  @Patch(":address")
+  @ApiOkResponse({ description: "Updated solver record" })
+  @ApiBadRequestResponse({ description: "Invalid update body" })
+  @ApiUnauthorizedResponse({ description: "Missing or invalid signature" })
+  @ApiNotFoundResponse({ description: "Solver not found" })
+  async updateSolver(@Param("address") address: string, @Body() dto: UpdateSolverDto) {
+    verifyStellarSignature(address, buildUpdateSolverMessage(address), dto.signature);
+
+    const { signature: _signature, ...patch } = dto;
+    const solver = await this.solversService.update(address, patch);
     if (!solver) throw new NotFoundException("Solver not found");
     return solver;
   }
