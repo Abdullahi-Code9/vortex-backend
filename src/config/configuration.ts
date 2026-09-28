@@ -113,6 +113,12 @@ export interface AppConfig {
   wsMaxConnections: number;
   wsBackplane: "memory" | "redis";
   redisUrl: string;
+  leaderElection: {
+    /** When false, all workers run unconditionally (pre-election behaviour). */
+    enabled: boolean;
+    /** Heartbeat interval in ms (default 5000). */
+    heartbeatMs: number;
+  };
 }
 
 export default (): AppConfig => ({
@@ -142,4 +148,8 @@ export default (): AppConfig => ({
   wsMaxConnections: parseInt(process.env.WS_MAX_CONNECTIONS ?? "1000", 10),
   wsBackplane: (process.env.WS_BACKPLANE ?? "memory") as "memory" | "redis",
   redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
+  leaderElection: {
+    enabled: (process.env.LEADER_ELECTION_ENABLED ?? "false") === "true",
+    heartbeatMs: parseInt(process.env.LEADER_ELECTION_HEARTBEAT_MS ?? "5000", 10),
+  },
 });

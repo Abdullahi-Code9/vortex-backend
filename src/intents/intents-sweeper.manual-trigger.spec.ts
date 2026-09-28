@@ -5,6 +5,20 @@ import { IntentsGateway } from "./intents.gateway";
 import { SolversService } from "../solvers/solvers.service";
 import { SolverRegistryService } from "../soroban/solver-registry.service";
 import { MetricsService } from "../metrics/metrics.service";
+import { LeaderElectionService } from "../common/leader-election";
+
+/** Minimal no-op LeaderElectionService for tests that don't exercise election. */
+function noopLeaderElection(): LeaderElectionService {
+  return {
+    registerWorker: jest.fn(),
+    isLeader: jest.fn().mockReturnValue(true),
+    getState: jest.fn().mockReturnValue(null),
+    getAllStates: jest.fn().mockReturnValue({}),
+    onModuleInit: jest.fn(),
+    onModuleDestroy: jest.fn(),
+    runHeartbeatOnce: jest.fn().mockResolvedValue(undefined),
+  } as unknown as LeaderElectionService;
+}
 
 /**
  * Issue #269 — the manual sweep trigger (operator break-glass).
@@ -27,7 +41,7 @@ describe("IntentsSweeperService — manual sweep trigger (#269)", () => {
     } as unknown as SolverRegistryService;
     const metricsService = { recordSweep: jest.fn() } as unknown as MetricsService;
 
-    return new IntentsSweeperService(intentsService, gateway, solversService, solverRegistry, metricsService);
+    return new IntentsSweeperService(intentsService, gateway, solversService, solverRegistry, metricsService, noopLeaderElection());
   }
 
   afterEach(() => jest.restoreAllMocks());

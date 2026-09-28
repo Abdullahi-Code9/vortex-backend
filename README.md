@@ -158,6 +158,8 @@ from those that are safe to leave at their testnet/dev defaults.
 | `WS_MAX_CONNECTIONS` | Recommended | `1000` | Tune to expected solver + frontend connection count |
 | `SENTRY_DSN` | Recommended | — (Sentry disabled) | Set to your Sentry project DSN for error alerting |
 | `LOG_LEVEL` | Recommended | `debug` | Set to `info` in production — `debug` is too noisy |
+| `LEADER_ELECTION_ENABLED` | Recommended (multi-replica) | `false` | Set to `true` when running N > 1 replicas to ensure singleton workers run on exactly one pod. Requires `DATABASE_URL` to point at a live Postgres instance. **Do not use PgBouncer in transaction-pooling mode** — see [Leader Election runbook](./docs/runbooks/leader-election.md). |
+| `LEADER_ELECTION_HEARTBEAT_MS` | Optional | `5000` | Heartbeat interval in ms. Lower = faster failover, higher DB load. Default gives ≤ 15 s failover. |
 | `PORT` | Optional | `4000` | Change if the container port mapping differs |
 
 For a production `.env` template, copy `.env.mainnet.example` — every

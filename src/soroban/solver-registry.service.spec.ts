@@ -30,6 +30,10 @@ function makeConfigService(
     wsMaxConnections: 1000,
     wsBackplane: "memory",
     redisUrl: "redis://localhost:6379",
+    leaderElection: {
+      enabled: false,
+      heartbeatMs: 5000,
+    },
   };
   return {
     get: (key: string) => {

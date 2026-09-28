@@ -5,6 +5,7 @@ import { AppConfig } from "../config/configuration";
 import { logger } from "../common/logger";
 import { SorobanService } from "./soroban.service";
 import { SolversService } from "../solvers/solvers.service";
+import { LeaderElectionService, Singleton } from "../common/leader-election";
 
 const POLL_INTERVAL_MS = 10_000;
 const RECONCILE_INTERVAL_MS = 60_000;
@@ -33,6 +34,7 @@ export function buildDedupeKey({ ledgerSequence, eventIndex }: DedupeKeyParts): 
   return `${ledgerSequence}:${eventIndex}`;
 }
 
+@Singleton("event-ingestion")
 @Injectable()
 export class EventIngestionService implements OnModuleInit, OnModuleDestroy {
   private interval?: NodeJS.Timeout;
@@ -47,11 +49,31 @@ export class EventIngestionService implements OnModuleInit, OnModuleDestroy {
     private readonly sorobanService: SorobanService,
     private readonly configService: ConfigService<AppConfig, true>,
     private readonly solversService: SolversService,
+    private readonly leaderElection: LeaderElectionService,
   ) {}
 
   onModuleInit() {
+    this.leaderElection.registerWorker("event-ingestion", (isLeader, _token) => {
+      if (isLeader) {
+        logger.info("[event-ingestion] became leader — starting polling intervals");
+        this.startIntervals();
+      } else {
+        logger.info("[event-ingestion] lost leadership — stopping polling intervals");
+        this.stopIntervals();
+      }
+    });
+  }
+
+  onModuleDestroy() {
+    this.stopIntervals();
+  }
+
+  private startIntervals(): void {
+    if (this.interval) return; // already running
     this.interval = setInterval(() => {
-      this.poll().catch((err) => logger.error(`[event-ingestion] poll failed: ${err instanceof Error ? err.message : String(err)}`));
+      this.poll().catch((err) =>
+        logger.error(`[event-ingestion] poll failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
     }, POLL_INTERVAL_MS);
 
     this.reconcileInterval = setInterval(() => {
@@ -63,9 +85,15 @@ export class EventIngestionService implements OnModuleInit, OnModuleDestroy {
     }, RECONCILE_INTERVAL_MS);
   }
 
-  onModuleDestroy() {
-    if (this.interval) clearInterval(this.interval);
-    if (this.reconcileInterval) clearInterval(this.reconcileInterval);
+  private stopIntervals(): void {
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = undefined;
+    }
+    if (this.reconcileInterval) {
+      clearInterval(this.reconcileInterval);
+      this.reconcileInterval = undefined;
+    }
   }
 
   async poll(): Promise<void> {
