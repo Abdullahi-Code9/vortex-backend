@@ -16,6 +16,14 @@ import { PrismaService } from "../prisma/prisma.service";
 import { GovernanceModule } from "../governance/governance.module";
 
 @Module({
+  // `forwardRef` on the SorobanModule import mirrors the one in SorobanModule:
+  // the two modules need each other (ShadowService here, IntentsService there).
+  imports: [
+    forwardRef(() => SolversModule),
+    RoutingModule,
+    TokensModule,
+    forwardRef(() => SorobanModule),
+  ],
   imports: [forwardRef(() => SolversModule), RoutingModule, TokensModule, SorobanModule, GovernanceModule],
   controllers: [IntentsController],
   providers: [

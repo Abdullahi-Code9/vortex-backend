@@ -74,6 +74,27 @@ export const CHAIN_FILL_WINDOW_DEFAULTS: Record<string, number> = {
 /** Fallback fill-window when chain is not in the map. */
 export const DEFAULT_FILL_WINDOW_SECONDS = 600;
 
+/**
+ * Stellar network passphrases keyed by the `STELLAR_NETWORK` values the schema
+ * accepts.
+ *
+ * A transaction envelope is only valid for the network it was built for, so
+ * anything that assembles an envelope — today only the shadow-mode
+ * simulation path in `StellarTxService.simulateContract` — needs this map.
+ * It lives next to the other network-derived constants rather than in the
+ * service so there is exactly one place to look when a network is added.
+ *
+ * Lookups fall back to testnet (see `StellarTxService`'s constructor): the
+ * worst outcome for a *simulated* envelope is a simulation against the wrong
+ * network, which surfaces immediately as a divergence rather than as a silent
+ * wrong-network write, because simulation never broadcasts.
+ */
+export const NETWORK_PASSPHRASES: Record<AppConfig["stellar"]["network"], string> = {
+  testnet: "Test SDF Network ; September 2015",
+  futurenet: "Test SDF Future Network ; October 2022",
+  mainnet: "Public Global Stellar Network ; September 2015",
+};
+
 export interface AppConfig {
   nodeEnv: string;
   port: number;
@@ -117,6 +138,30 @@ export interface AppConfig {
   wsMaxConnections: number;
   wsBackplane: "memory" | "redis";
   redisUrl: string;
+  /**
+   * Shadow-mode divergence monitor (issue #401).
+   *
+   * Runs read-only on-chain simulations of every intent state transition in
+   * parallel with the authoritative off-chain path and reports where the two
+   * disagree. See docs/runbooks/onchain-cutover.md for the go/no-go threshold.
+   */
+  shadow: {
+    /** Master switch. When false, `ShadowService.observe` is a no-op. */
+    enabled: boolean;
+    /** Fraction of transitions to simulate, in `[0, 1]`. `1` = every one. */
+    sampleRate: number;
+    /** Hard cap on queued observations; beyond this they are dropped + counted. */
+    queueMax: number;
+    /** How many observations the background drain simulates concurrently. */
+    concurrency: number;
+    /**
+     * Public key used as the source account for simulation envelopes.
+     *
+     * Never signed, never submitted, never charged — it only has to be a valid
+     * StrKey. Empty means "simulate nothing", which the monitor reports as
+     * `contract_unconfigured` rather than as zero divergence.
+     */
+    sourceAccount: string;
   governance: {
     /**
      * On-chain governance / parameters contract ID.
@@ -169,6 +214,15 @@ export default (): AppConfig => ({
   wsMaxConnections: parseInt(process.env.WS_MAX_CONNECTIONS ?? "1000", 10),
   wsBackplane: (process.env.WS_BACKPLANE ?? "memory") as "memory" | "redis",
   redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
+  shadow: {
+    // Off by default: the monitor costs one simulation per sampled transition,
+    // so it is opt-in per environment rather than something a deployer
+    // discovers they are paying for.
+    enabled: (process.env.SHADOW_MODE_ENABLED ?? "false") === "true",
+    sampleRate: clampSampleRate(process.env.SHADOW_SAMPLE_RATE),
+    queueMax: clampPositiveInt(process.env.SHADOW_QUEUE_MAX, 256),
+    concurrency: clampPositiveInt(process.env.SHADOW_CONCURRENCY, 4),
+    sourceAccount: process.env.SHADOW_SOURCE_ACCOUNT ?? "",
   governance: {
     paramsContractId: process.env.PARAMS_CONTRACT_ID ?? "",
     paramsPollIntervalMs: parseInt(process.env.PARAMS_POLL_INTERVAL_MS ?? "30000", 10),
@@ -177,3 +231,25 @@ export default (): AppConfig => ({
     heartbeatMs: parseInt(process.env.LEADER_ELECTION_HEARTBEAT_MS ?? "5000", 10),
   },
 });
+
+/** Parse `SHADOW_SAMPLE_RATE` into a probability, defaulting to full sampling. */
+function clampSampleRate(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return 1;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return 1;
+  if (parsed < 0) return 0;
+  if (parsed > 1) return 1;
+  return parsed;
+}
+
+/**
+ * Parse a positive integer env var, falling back to `fallback` for anything
+ * unparseable or non-positive. Keeps a typo from turning the bounded queue
+ * into an unbounded one.
+ */
+function clampPositiveInt(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return parsed;
+}
